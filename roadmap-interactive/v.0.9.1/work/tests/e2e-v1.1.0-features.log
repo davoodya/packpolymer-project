@@ -1,0 +1,36 @@
+PASS | desktop uses three-column layout with a phase-only right rail and other cards on the left | {"display":"grid","columns":3,"rightCards":1,"rightOnlyPhases":true,"leftHasOverview":true,"leftHasDeveloper":true,"leftHasPhases":false,"geometricOrder":true,"sticky":"sticky","button":true}
+PASS | sticky phase-list access control exists
+PASS | right phase rail shows all 13 complete titles with wrapping instead of truncation | {"count":13,"whiteSpace":["normal","normal","normal","normal","normal","normal","normal","normal","normal","normal","normal","normal","normal"],"textOverflow":["clip","clip","clip","clip","clip","clip","clip","clip","clip","clip","clip","clip","clip"],"hasEllipsis":false,"withinWidth":true,"wrapped":true}
+PASS | Phase 3 search finds a concrete Step/Sub-step target | {"phase":"f2","step":"f2-s1","sub":"f2-s1-1","stack":"Woodmart"}
+PASS | search stays active when Review filter is enabled; only the matching Phase 3 item remains | {"q":"فاز ۳","phases":["فاز ۳"],"reviewOn":true,"sub":true,"shownSubs":1}
+PASS | stack filter combines with the existing search and Review filter | {"q":"فاز ۳","phaseCount":1,"sub":true,"stack":"Woodmart"}
+PASS | Review flags use a rose color; active Stack highlight uses indigo, not yellow | {"reviewColor":"rgb(255, 217, 231)","reviewBackground":"rgba(202, 116, 157, 0.14)","stackHighlight":"rgba(123, 127, 212, 0.32)","stackChip":"linear-gradient(135deg, rgba(123, 127, 212, 0.28), rgba(67, 179, 162, 0.1))","menuIsThreeDots":true,"noteLabel":"یادداشت"}
+PASS | operations are clearly an ellipsis menu and Sub-step note action has a readable label | {"reviewColor":"rgb(255, 217, 231)","reviewBackground":"rgba(202, 116, 157, 0.14)","stackHighlight":"rgba(123, 127, 212, 0.32)","stackChip":"linear-gradient(135deg, rgba(123, 127, 212, 0.28), rgba(67, 179, 162, 0.1))","menuIsThreeDots":true,"noteLabel":"یادداشت"}
+PASS | Done filter also intersects with Phase 3 search and Review/stack filters | {"q":"فاز ۳","filterOn":true,"phases":["فاز ۳"],"step":true}
+PASS | Phase checkbox completes every Step and Sub-step in its phase | {"phase":true,"steps":true,"subs":true,"doneClass":true}
+PASS | unchecking a Phase clears all descendant checks | {"phase":false,"descendants":false}
+PASS | Phase checkbox visibly indicates partial completion | {"indeterminate":true,"checked":false}
+PASS | responsive sidebar structure and no overflow @1280 | {"sw":1280,"cw":1280,"display":"grid","rightDisplay":"flex","overviewOrder":"0","phasesOrder":"0","mainOrder":"0","leftOrder":"0","rightOrder":"0"}
+PASS | responsive sidebar structure and no overflow @1024 | {"sw":1024,"cw":1024,"display":"grid","rightDisplay":"flex","overviewOrder":"1","phasesOrder":"2","mainOrder":"11","leftOrder":"0","rightOrder":"0"}
+PASS | responsive sidebar structure and no overflow @768 | {"sw":768,"cw":768,"display":"grid","rightDisplay":"flex","overviewOrder":"1","phasesOrder":"2","mainOrder":"11","leftOrder":"0","rightOrder":"0"}
+PASS | responsive sidebar structure and no overflow @414 | {"sw":414,"cw":414,"display":"flex","rightDisplay":"flex","overviewOrder":"1","phasesOrder":"2","mainOrder":"1","leftOrder":"2","rightOrder":"3"}
+PASS | Notebook remains single-note by default | {"split":false,"panes":1}
+PASS | Split View shows two distinct notes with independent toolbars/actions | {"split":true,"panes":2,"distinct":true,"columns":"619.5px 619.5px","primaryMode":"edit","secondaryMode":"read","toolbarPrimary":true,"toolbarSecondary":true,"actionsPrimary":20,"actionsSecondary":20}
+PASS | each Split panel switches Read/Edit independently | {"p":"read","s":"edit","pm":true,"sm":false}
+PASS | secondary Toolbar edits only the secondary note | {"secondary":"**متن اصلی برای مقایسه + متن ویژه پنل دوم**","primaryMode":"read","sameNote":false}
+PASS | secondary Copy action copies its own Markdown | "**متن اصلی برای مقایسه + متن ویژه پنل دوم**"
+PASS | secondary Read Mode renders Markdown while primary stays in its own mode | {"primaryRead":true,"secondaryRead":true,"preview":true,"hasMarkdown":true}
+PASS | secondary Copy in Read mode returns rendered text | "متن اصلی برای مقایسه + متن ویژه پنل دوم"
+PASS | New Note operation in secondary panel replaces only that panel note | {"split":true,"secondaryId":"nb-rk3b3s","primaryId":"nb-5vd8wr","title":"یادداشت پنل دوم جدید","body":"محتوای تازه پنل دوم"}
+PASS | Split selection and independent mode are saved in local data | {"split":true,"secondaryId":"nb-rk3b3s","secondaryMode":"edit"}
+PASS | answers-roadmap JSON preserves the two-pane Notebook state | {"split":true,"secondaryId":"nb-rk3b3s","secondaryMode":"edit","notes":3}
+PASS | reopening Notebook restores Last Note and the optional Split View | {"open":true,"note":true,"split":true,"panes":2}
+PASS | Back to Note List still works from Split View
+PASS | Split View works side by side on a tablet width | {"w":768,"split":true,"columns":2,"overflow":false}
+PASS | Notebook Split remains usable and contained on mobile | {"w":414,"vw":414,"split":true,"columns":1,"overflow":false}
+PASS | Ctrl+Shift+. exports JSON and is handled by the app | {"prevented":true,"downloads":1}
+PASS | Ctrl+Shift+; creates a new note and opens Notebook | {"prevented":true,"beforeNotes":3,"afterNew":{"total":4,"view":"note","open":true}}
+PASS | old Ctrl+S / Alt+N handlers are removed (no browser shortcut interception) | {"ctrlS":false,"ctrlE":false,"altN":false,"nbOpen":true}
+PASS | ZERO JavaScript errors in updated features | []
+
+ALL TESTS PASSED

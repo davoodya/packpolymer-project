@@ -1,0 +1,41 @@
+PASS | counts phases=13 | 13
+PASS | vazir loaded
+FAIL | sidebar order: overview first | ["فهرست فازها","نمای کلی پروژه","آرشیو و نیازمند بررسی","فیلتر استک پروژه","داده و ابزار","محل ذخیره پاسخ ها","دفترچه یادداشت","راهنمای سریع","راهنمای توسعه دهنده"]
+FAIL | sidebar order: phase list second | "نمای کلی پروژه"
+PASS | sidebar order: dev guide last | "راهنمای توسعه دهنده"
+PASS | sidebar fills viewport height | {"sideH":786,"vh":900}
+FAIL | sidebar own scroll
+PASS | sidebar card collapse works (stack)
+PASS | sidebar phase expands to steps | {"steps":7,"firstNum":"۱.۱"}
+PASS | sidebar step click navigates/flashes step | {"hit":true,"mainStepsVisible":true}
+PASS | search EN digit == FA digit | {"sEn":35,"sFa":35}
+PASS | stack filter shows steps | 49
+PASS | stack keyword highlighted <mark.hl-stack> | 39
+PASS | stack chips use Vazir | "Vazir, Vazirmatn, Tahoma, system-ui, sans-serif"
+PASS | stack active note explains highlight
+PASS | step tick ticks all subs | {"done":true,"subsDone":6,"subs":6}
+PASS | notebook opens to Note List (no notes yet) | {"open":true,"listVisible":true,"width":1100}
+PASS | notebook width >= 800 (doubled) | 1100
+PASS | new note opens editor (Edit only, preview hidden) | {"view":true,"editVisible":true,"previewHidden":true,"total":"۱"}
+PASS | Copy in Edit copies raw Markdown | "# تیتر یک\n\nمتن **مهم** برای تست\n\n- [ ] کار اول"
+PASS | Read Mode: edit hidden, preview visible, never side-by-side | {"editHidden":true,"previewVisible":true,"h1":true,"bothVisible":false}
+PASS | Read Mode renders Markdown h1
+PASS | Copy in Read copies rendered text only (no ** ) | "تیتر یک\n\nمتن مهم برای تست\n\n☐ کار اول"
+PASS | Back to Note List shows list with 1 card | {"cards":1,"listVisible":true,"backLabel":true}
+PASS | note card reopens note; Back button labeled Back to Note List | "‹ Back to Note List"
+PASS | reopen notebook resumes Last Note | {"inNote":true,"title":"یادداشت دوم - آخرین","total":"۲"}
+PASS | two notes stored | "۲"
+PASS | add SubStep with number 2 inserts at position 2 | ["۱.۱.۱","۱.۱.۲","۱.۱.۳","۱.۱.۴","۱.۱.۵","۱.۱.۶","۱.۱.۷"]
+PASS | sub numbers displayed (hierarchical) | ["۱.۱.۱","۱.۱.۲","۱.۱.۳"]
+PASS | add Step with number 1 inserts first + renumbers | {"firstIsNew":true,"firstNum":"۱.۱"}
+PASS | add Phase with number 2 inserts second + auto label | {"count":14,"secondIsNew":true,"secondLabel":"فاز ۲"}
+PASS | delete phase renumbers back to 13 | {"count":13,"firstLabel":"فاز ۱"}
+PASS | MD report modal opens + includes notebook notes | {"modal":true,"hasNb":true}
+PASS | clean-all clears notebook notes | {"done":"۰","ls":{"nb":0,"nbText":0}}
+PASS | responsive no horizontal overflow @1280 | {"sw":1280,"cw":1280,"nbW":1100}
+PASS | responsive no horizontal overflow @768 | {"sw":768,"cw":768,"nbW":745}
+PASS | responsive no horizontal overflow @414 | {"sw":414,"cw":414,"nbW":414}
+PASS | notebook mobile fills width | {"listVisible":true,"w":414,"vw":414}
+PASS | ZERO JS errors | []
+
+FAILED: sidebar order: overview first ; sidebar order: phase list second ; sidebar own scroll

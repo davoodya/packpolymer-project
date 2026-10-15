@@ -1,0 +1,9 @@
+PASS | sandbox iframe renders (13 phases) | {"phases":13,"steps":122}
+PASS | sandbox notebook opens to list
+PASS | sandbox notebook create+read mode works | {"read":true,"strong":true}
+PASS | sidecar http auto-loads nbNotes + resumes last note | {"inNote":true,"title":"یادداشت کناری"}
+PASS | notebook share fallback copies note text | "از فایل **کناری** آمد"
+PASS | state persists nbNotes + last note id | {"nb":1,"active":true}
+PASS | sidebar extends to bottom of viewport at page end | {"bottom":830,"vh":850,"gap":20}
+PASS | ZERO JS errors (sandbox+sidecar) | []
+ALL PASS

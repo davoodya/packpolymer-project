@@ -1,0 +1,54 @@
+{
+  "app": "packpolymer-marketplace-roadmap",
+  "kind": "answers",
+  "version": 2,
+  "savedAt": "2026-10-14T14:14:16.662Z",
+  "appVersion": "1.0.1",
+  "checks": {
+    "f2-s1": true,
+    "f2-s1-1": true,
+    "f2-s1-2": true,
+    "f2-s1-3": true,
+    "f2-s1-4": true,
+    "f2-s1-5": true,
+    "f0-s1-1": true
+  },
+  "notes": {},
+  "marks": {
+    "archived": {},
+    "review": {
+      "f2-s1-1": true
+    }
+  },
+  "notebook": "# یادداشت اصلی\n\n**متن اصلی برای مقایسه + متن ویژه پنل دوم**\n\n---\n\n# یادداشت دوم\n\nمتن اولیه یادداشت دوم\n\n---\n\n# یادداشت پنل دوم جدید\n\nمحتوای تازه پنل دوم",
+  "nbNotes": [
+    {
+      "id": "nb-qfzalc",
+      "title": "یادداشت اصلی",
+      "body": "**متن اصلی برای مقایسه + متن ویژه پنل دوم**",
+      "createdAt": "2026-10-14T14:14:11.450Z",
+      "updatedAt": "2026-10-14T14:14:14.319Z"
+    },
+    {
+      "id": "nb-usizhf",
+      "title": "یادداشت دوم",
+      "body": "متن اولیه یادداشت دوم",
+      "createdAt": "2026-10-14T14:14:12.475Z",
+      "updatedAt": "2026-10-14T14:14:12.785Z"
+    },
+    {
+      "id": "nb-ru8hq2",
+      "title": "یادداشت پنل دوم جدید",
+      "body": "محتوای تازه پنل دوم",
+      "createdAt": "2026-10-14T14:14:15.265Z",
+      "updatedAt": "2026-10-14T14:14:15.648Z"
+    }
+  ],
+  "nbActiveId": "nb-usizhf",
+  "nbSecondaryId": "nb-ru8hq2",
+  "nbSplit": true,
+  "nbMode": "read",
+  "nbSecondaryMode": "edit",
+  "nbView": "note",
+  "customized": false
+}

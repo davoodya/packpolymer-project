@@ -1,0 +1,2746 @@
+/* =====================================================================
+ *  APP — موتور برنامه (بدون هیچ وابستگی خارجی)
+ *  ذخیره سازی: localStorage (با fallback حافظه ای) + خروجی/ورودی JSON
+ * ===================================================================== */
+(function () {
+  'use strict';
+
+  /* ---------- ثابت ها -------------------------------------------------- */
+  const STORE_KEY = 'packpolymer-marketplace-roadmap-v2';
+  const CONTENT_VERSION = '2.0';
+  const APP_VERSION = '1.1.0';
+  const COLORS = ['#38bdf8', '#a78bfa', '#34d399', '#f59e0b', '#f472b6', '#22d3ee', '#facc15', '#fb7185', '#4ade80', '#94a3b8', '#c084fc'];
+  const META_SRC = (typeof PLAN_META !== 'undefined') ? PLAN_META : {};
+  const DEF_TITLE = 'پک پلیمر (Packpolymer) — نقشه راه ساخت بازارگاه B2B و فروشگاه B2C پلیمر و سیلیکون';
+  const DEF_SUB = 'استک پروژه: Woodmart + Elementor + WooCommerce + Dokan Pro + Rank Math Pro + Wordfence · قابل ویرایش، با یادداشت برای هر مرحله و زیرمرحله';
+  const STACK = (META_SRC.stack && META_SRC.stack.length) ? META_SRC.stack.slice() : [];
+  const BRAND = META_SRC.brand || 'Packpolymer — پک پلیمر';
+
+  /* ---------- ابزارهای کمکی -------------------------------------------- */
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.prototype.slice.call((r || document).querySelectorAll(s));
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const uid = (p) => p + '-' + Math.random().toString(36).slice(2, 8);
+  /* آیکون SVG داخلی (بدون وابستگی بیرونی) — نام ها در انتهای فایل به صورت <symbol> تعریف شده اند */
+  const I = (n, cls) => '<svg class="ic ' + (cls || '') + '" aria-hidden="true"><use href="#i-' + n + '" xlink:href="#i-' + n + '"></use></svg>';
+  /* آیکون های آماده برای فازها؛ در حالت ویرایش، جای آیکون می توانی نام یکی از این ها را بنویسی:
+     compass, server, cart, palette, building, package, flask, zap, megaphone, rocket, paperclip, more … */
+  const KNOWN_ICONS = ['compass','server','cart','palette','building','package','flask','zap','megaphone','rocket','paperclip','more','tools','chart','phases','target','bulb','check'];
+  const iconOf = (v, cls) => (KNOWN_ICONS.indexOf(String(v).trim()) !== -1)
+      ? I(String(v).trim(), 'big ' + (cls || ''))
+      : '<span class="em">' + esc(v) + '</span>';
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const FA_DIGITS = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+  const fa = (n) => String(n).replace(/[0-9]/g, (d) => FA_DIGITS[+d]);
+  const pct = (d, t) => (t ? Math.round((d / t) * 100) : 0);
+  const SIDEBAR_LAYOUTS = ['dual-right','single-right','dual-left'];
+  function validSidebarLayout(v) { return SIDEBAR_LAYOUTS.indexOf(v) !== -1 ? v : 'dual-right'; }
+  function clampScale(v, fallback) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return fallback == null ? 1 : fallback;
+    return Math.min(1.5, Math.max(.8, Math.round(n * 100) / 100));
+  }
+
+  /* ---------- نرمال سازی متن برای جست وجو -------------------------------
+   * اعداد فارسی/عربی → انگلیسی، ي/ك عربی → ی/ک، حذف نیم فاصله و اعراب،
+   * یکدست سازی فاصله ها. بهاین ترتیب «فاز 1» == «فاز ۱» و «می شود» == «میشود».
+   * ------------------------------------------------------------------- */
+  const DIGIT_MAP = { '\u06f0':'0','\u06f1':'1','\u06f2':'2','\u06f3':'3','\u06f4':'4','\u06f5':'5','\u06f6':'6','\u06f7':'7','\u06f8':'8','\u06f9':'9',
+                      '\u0660':'0','\u0661':'1','\u0662':'2','\u0663':'3','\u0664':'4','\u0665':'5','\u0666':'6','\u0667':'7','\u0668':'8','\u0669':'9' };
+  function norm(s) {
+    return String(s == null ? '' : s).toLowerCase()
+      .replace(/[\u06f0-\u06f9\u0660-\u0669]/g, (d) => DIGIT_MAP[d])
+      .replace(/[\u064a\u0649]/g, '\u06cc')      // ي / ى → ی
+      .replace(/\u0643/g, '\u06a9')                // ك → ک
+      .replace(/[\u0623\u0625\u0622\u0671]/g, '\u0627') // أ إ آ ٱ → ا
+      .replace(/\u0629/g, '\u0647')                // ة → ه
+      .replace(/[\u064b-\u0652\u0640]/g, '')      // اعراب و کشیده
+      .replace(/[\u200c\u200d\u200e\u200f]/g, ' ') // کنترل های قدیمی را به فاصله معمولی تبدیل کن
+      .replace(/[\u00a0\t\r\n]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+  /* کش متنِ نرمال شده هر مرحله (WeakMap → در JSON ذخیره نمی شود) */
+  const HAY = new WeakMap();
+  function invalidateHay(stepObj) { HAY.delete(stepObj); }
+
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._tm);
+    t._tm = setTimeout(() => t.classList.remove('show'), 2600);
+  }
+
+  /* ---------- ذخیره سازی (با fallback برای iframe سندباکس) -------------- */
+  const store = (function () {
+    let ok = true, mem = null;
+    try {
+      window.localStorage.setItem('__t', '1');
+      window.localStorage.removeItem('__t');
+    } catch (e) { ok = false; }
+    return {
+      available: ok,
+      get() {
+        try { return ok ? window.localStorage.getItem(STORE_KEY) : mem; } catch (e) { return mem; }
+      },
+      set(v) {
+        if (ok) { try { window.localStorage.setItem(STORE_KEY, v); } catch (e) { ok = false; mem = v; } }
+        else mem = v;
+      },
+      del() {
+        if (ok) { try { window.localStorage.removeItem(STORE_KEY); } catch (e) { } }
+        mem = null;
+      }
+    };
+  })();
+
+  /* ---------- فایل کناری پاسخ ها (answers-roadmap.json) ------------------
+   * هدف: همه پاسخ ها (تیک ها، یادداشت ها و دفترچه) به صورت پیش فرض در فایل
+   * «answers-roadmap.json» که کنار همین فایل HTML است ذخیره شود.
+   *  · اگر مرورگر از File System Access API پشتیبانی کند (کروم/اج/اُپرا):
+   *    یک بار فایل را انتخاب می کنی و از آن به بعد ذخیره خودکار در همان فایل است.
+   *  · اگر فایل از طریق http(s) باز شده باشد، در شروع کار همان فایل خوانده
+   *    می شود (بارگذاری خودکار پاسخ ها).
+   *  · در غیر این صورت (یا در پیش نمایش داخل برنامه) ذخیره سازی روی
+   *    localStorage انجام می شود و همه چیز بدون خطا کار می کند.
+   * ------------------------------------------------------------------- */
+  const SIDECAR = 'answers-roadmap.json';
+  const APP_ID = 'packpolymer-marketplace-roadmap';
+
+  const idb = (function () {
+    let db = null;
+    function open() {
+      return new Promise((res) => {
+        try {
+          if (!window.indexedDB) return res(null);
+          const rq = indexedDB.open('packpolymer-roadmap', 1);
+          rq.onupgradeneeded = () => { try { rq.result.createObjectStore('kv'); } catch (e) { } };
+          rq.onsuccess = () => res(rq.result);
+          rq.onerror = () => res(null);
+        } catch (e) { res(null); }
+      });
+    }
+    return {
+      async set(k, v) {
+        const d = await open(); if (!d) return false;
+        return new Promise((res) => {
+          try {
+            const tx = d.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k);
+            tx.oncomplete = () => res(true); tx.onerror = () => res(false);
+          } catch (e) { res(false); }
+        });
+      },
+      async get(k) {
+        const d = await open(); if (!d) return null;
+        return new Promise((res) => {
+          try {
+            const tx = d.transaction('kv', 'readonly'); const rq = tx.objectStore('kv').get(k);
+            rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null);
+          } catch (e) { res(null); }
+        });
+      },
+      async del(k) {
+        const d = await open(); if (!d) return false;
+        return new Promise((res) => {
+          try {
+            const tx = d.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k);
+            tx.oncomplete = () => res(true); tx.onerror = () => res(false);
+          } catch (e) { res(false); }
+        });
+      }
+    };
+  })();
+
+  const fileStore = {
+    handle: null,
+    connected: false,
+    status: 'idle',      // idle | connected | error | busy
+    lastSaved: '',
+    supported() { return typeof window.showOpenFilePicker === 'function'; },
+    answerPayload() {
+      return {
+        app: APP_ID, kind: 'answers', version: 2,
+        savedAt: new Date().toISOString(),
+        appVersion: APP_VERSION,
+        checks: state.checks, notes: state.notes, marks: state.marks,
+        notebook: nbAllText(),
+        nbNotes: state.nbNotes || [],
+        nbActiveId: state.nbActiveId || '',
+        nbSecondaryId: state.nbSecondaryId || '',
+        nbSplit: !!state.nbSplit,
+        nbMode: state.nbMode || 'edit',
+        nbSecondaryMode: state.nbSecondaryMode || 'read',
+        nbView: state.nbView || 'list',
+        sidebarLayout: validSidebarLayout(state.ui.sidebarLayout),
+        uiFontScale: clampScale(state.ui.fontScale, 1),
+        nbFontScale: clampScale(state.nbFontScale, 1),
+        customized: !!state.customized
+      };
+    },
+    async connect() {
+      if (!this.supported()) {
+        toast('این مرورگر اتصال مستقیم فایل را پشتیبانی نمی کند؛ از «خروجی JSON» استفاده کن.');
+        return false;
+      }
+      try {
+        const [h] = await window.showOpenFilePicker({
+          multiple: false, id: 'packpolymer-answers', startIn: 'documents',
+          types: [{ description: 'فایل پاسخ های پک پلیمر (JSON)', accept: { 'application/json': ['.json'] } }]
+        });
+        if (!h) return false;
+        this.handle = h; this.connected = true; this.status = 'connected';
+        try { await idb.set('answersHandle', h); } catch (e) { }
+        const data = await this.read();
+        if (data) applyAnswers(data, true);
+        await this.write();
+        saveNow(); render();
+        toast('فایل پاسخ ها متصل شد: ' + h.name + ' — از این پس ذخیره خودکار در همین فایل است.');
+        return true;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return false;
+        this.status = 'error';
+        toast('اتصال فایل ناموفق بود: ' + (e && e.message ? e.message : 'خطای نامشخص'));
+        return false;
+      }
+    },
+    async restoreFromIdb() {
+      if (!this.supported()) return false;
+      try {
+        const h = await idb.get('answersHandle');
+        if (!h) return false;
+        let perm = 'granted';
+        try { perm = await h.queryPermission({ mode: 'readwrite' }); } catch (e) { perm = 'prompt'; }
+        if (perm !== 'granted') { this.handle = h; this.status = 'need-permission'; return false; }
+        this.handle = h; this.connected = true; this.status = 'connected';
+        const data = await this.read();
+        if (data) applyAnswers(data, true);
+        return true;
+      } catch (e) { return false; }
+    },
+    async regrant() {
+      try {
+        if (!this.handle) return this.connect();
+        const p = await this.handle.requestPermission({ mode: 'readwrite' });
+        if (p === 'granted') { this.connected = true; this.status = 'connected'; const d = await this.read(); if (d) applyAnswers(d, true); saveNow(); render(); return true; }
+      } catch (e) { }
+      return this.connect();
+    },
+    async read() {
+      if (!this.handle) return null;
+      try {
+        const f = await this.handle.getFile();
+        const t = (await f.text()).replace(/^\uFEFF/, '').trim();
+        if (!t) return null;
+        const d = JSON.parse(t);
+        return d && typeof d === 'object' ? (d.state && !d.checks ? d.state : d) : null;
+      } catch (e) { return null; }
+    },
+    async write() {
+      if (!this.handle || !this.connected) return false;
+      try {
+        this.status = 'busy';
+        const w = await this.handle.createWritable();
+        await w.write(JSON.stringify(this.answerPayload(), null, 2));
+        await w.close();
+        this.status = 'connected';
+        this.lastSaved = new Date().toLocaleTimeString('fa-IR');
+        const el = document.querySelector('[data-store-state]'); if (el) el.textContent = 'ذخیره شد · ' + this.lastSaved;
+        return true;
+      } catch (e) { this.status = 'error'; return false; }
+    },
+    async save() {
+      if (!this.connected) return false;
+      clearTimeout(this._t);
+      this._t = setTimeout(() => { this.write().then(ok => { if (!ok) toast('ذخیره در فایل ناموفق بود (دسترسی فایل را بررسی کن).'); }); }, 700);
+      return true;
+    },
+    async disconnect() {
+      this.handle = null; this.connected = false; this.status = 'idle';
+      await idb.del('answersHandle');
+      saveNow(); render();
+      toast('اتصال فایل قطع شد؛ از این پس ذخیره سازی در حافظه مرورگر است.');
+    },
+    async fetchSidecar() {
+      if (location.protocol === 'file:') return null;   // fetch روی file:// مسدود است
+      try {
+        const r = await fetch(SIDECAR + '?t=' + Date.now(), { cache: 'no-store' });
+        if (!r.ok) return null;
+        const t = (await r.text()).replace(/^\uFEFF/, '').trim();
+        if (!t) return null;
+        const d = JSON.parse(t);
+        return (d && typeof d === 'object') ? (d.state && !d.checks ? d.state : d) : null;
+      } catch (e) { return null; }
+    }
+  };
+
+  function answersEmpty(a) {
+    if (!a) return true;
+    const hasChecks = a.checks && Object.keys(a.checks).length > 0;
+    const hasNotes = a.notes && Object.keys(a.notes).length > 0;
+    const hasMarks = a.marks && ((a.marks.archived && Object.keys(a.marks.archived).length) || (a.marks.review && Object.keys(a.marks.review).length));
+    const hasNb = (a.notebook && String(a.notebook).trim().length > 0) ||
+      (Array.isArray(a.nbNotes) && a.nbNotes.some(n => n && String(n.body || '').trim().length > 0));
+    return !hasChecks && !hasNotes && !hasNb && !hasMarks;
+  }
+
+  /* ---------- دفترچه چندیادداشتی: مدل داده --------------------------------
+   * منبع اصلی: state.nbNotes = [{id,title,body,createdAt,updatedAt}]
+   * state.nbActiveId آخرین یادداشت بازشده است تا با بازکردن دوباره دفترچه
+   * دقیقاً همان یادداشت (Last Note) ادامه پیدا کند.
+   * state.notebook فقط برای سازگاری با فرمت قدیمی/گزارش نگه داشته می شود.
+   * --------------------------------------------------------------------- */
+  function nbNormalizeNote(n) {
+    if (!n || typeof n !== 'object') return null;
+    const now = new Date().toISOString();
+    return {
+      id: n.id || uid('nb'),
+      title: typeof n.title === 'string' ? n.title : '',
+      body: typeof n.body === 'string' ? n.body : '',
+      createdAt: n.createdAt || now,
+      updatedAt: n.updatedAt || n.createdAt || now
+    };
+  }
+  function nbTitleFromBody(body) {
+    const lines = String(body || '').split('\n').map(x => x.trim()).filter(Boolean);
+    if (!lines.length) return 'یادداشت بدون عنوان';
+    const h = lines[0].replace(/^#{1,6}\s*/, '').replace(/[*_`>]/g, '').trim();
+    return (h || 'یادداشت بدون عنوان').slice(0, 60);
+  }
+  function nbAllText() {
+    const list = (state.nbNotes || []).filter(n => n && (String(n.title || '').trim() || String(n.body || '').trim()));
+    if (!list.length) return state.notebook && !(state.nbNotes && state.nbNotes.length) ? state.notebook : '';
+    return list.map(n => '# ' + (String(n.title || '').trim() || nbTitleFromBody(n.body)) + '\n\n' + String(n.body || '').trim()).join('\n\n---\n\n');
+  }
+  function nbSyncLegacy() { state.notebook = nbAllText(); }
+  function nbMigrate() {
+    if (!Array.isArray(state.nbNotes)) state.nbNotes = [];
+    state.nbNotes = state.nbNotes.map(nbNormalizeNote).filter(Boolean);
+    // مهاجرت از فرمت تک یادداشتی قدیمی
+    if (!state.nbNotes.length && typeof state.notebook === 'string' && state.notebook.trim()) {
+      const now = new Date().toISOString();
+      state.nbNotes = [{ id: uid('nb'), title: nbTitleFromBody(state.notebook), body: state.notebook, createdAt: now, updatedAt: now }];
+    }
+    if (state.nbNotes.length) {
+      const ok = state.nbNotes.some(n => n.id === state.nbActiveId);
+      if (!ok) {
+        const sorted = state.nbNotes.slice().sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+        state.nbActiveId = sorted[0].id;
+      }
+    } else state.nbActiveId = '';
+    if (!state.nbNotes.some(n => n.id === state.nbSecondaryId) || state.nbSecondaryId === state.nbActiveId) {
+      const other = state.nbNotes.find(n => n.id !== state.nbActiveId);
+      state.nbSecondaryId = other ? other.id : '';
+    }
+    state.nbSplit = !!state.nbSplit && !!state.nbSecondaryId;
+    if (state.nbMode !== 'read') state.nbMode = 'edit';
+    state.nbSecondaryMode = state.nbSecondaryMode === 'edit' ? 'edit' : 'read';
+    if (state.nbView !== 'note') state.nbView = 'list';
+    if (state.nbView === 'note' && !state.nbActiveId) state.nbView = 'list';
+    nbSyncLegacy();
+  }
+  function nbActive(side) {
+    const id = side === 'secondary' ? state.nbSecondaryId : state.nbActiveId;
+    return (state.nbNotes || []).find(n => n.id === id) || null;
+  }
+  function nbSorted(list) {
+    return (list || state.nbNotes || []).slice().sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  }
+
+  /* اعمال «پاسخ ها» روی وضعیت فعلی (بدون دست زدن به ساختار مراحل پیش فرض) */
+  function applyAnswers(a, silent) {
+    if (!a) return false;
+    state.checks = a.checks || {};
+    state.notes = a.notes || {};
+    if (a.marks) state.marks = { archived: a.marks.archived || {}, review: a.marks.review || {} };
+    state.ui.sidebarLayout = validSidebarLayout(a.sidebarLayout);
+    if (a.uiFontScale != null) state.ui.fontScale = clampScale(a.uiFontScale, state.ui.fontScale);
+    if (a.nbFontScale != null) state.nbFontScale = clampScale(a.nbFontScale, state.nbFontScale);
+    if (Array.isArray(a.nbNotes) && a.nbNotes.length) {
+      state.nbNotes = a.nbNotes.map(nbNormalizeNote).filter(Boolean);
+      state.nbActiveId = a.nbActiveId || '';
+      state.nbSecondaryId = a.nbSecondaryId || '';
+      state.nbSplit = !!a.nbSplit;
+      state.nbMode = a.nbMode === 'read' ? 'read' : 'edit';
+      state.nbSecondaryMode = a.nbSecondaryMode === 'edit' ? 'edit' : 'read';
+      state.nbView = a.nbView || state.nbView || 'list';
+      nbMigrate();
+    } else if (typeof a.notebook === 'string') { state.notebook = a.notebook; nbMigrate(); }
+    if (a.customized !== undefined) state.customized = !!a.customized;
+    if (a.meta && a.meta.title && !state.customized) state.meta = Object.assign(state.meta, a.meta);
+    if (a.savedAt) state.savedAt = a.savedAt;
+    if (!silent) render();
+    return true;
+  }
+
+  /* ---------- نرمال سازی داده پیش فرض ----------------------------------- */
+  function normalizePhase(p, pi) {
+    const ph = {
+      id: p.id || 'phase-' + pi,
+      icon: p.icon || '📌',
+      title: p.title || ('فاز ' + (pi + 1)),
+      goal: p.goal || '',
+      dod: p.dod || '',
+      steps: (p.steps || []).map((s, si) => {
+        const sid = s.id || ('s-' + pi + '-' + si);
+        return {
+          id: sid,
+          title: s.title || ('مرحله ' + (si + 1)),
+          meta: s.meta || '',
+          tip: s.tip || '',
+          stack: s.stack || '',
+          subs: (s.subs || []).map((x, i) => {
+            if (typeof x === 'string') return { id: sid + '-' + (i + 1), title: x };
+            return { id: x.id || (sid + '-' + (i + 1)), title: x.title || '' };
+          })
+        };
+      })
+    };
+    return ph;
+  }
+
+  const DEFAULT_PLAN = (function () {
+    const src = (typeof PLAN_PARTS !== 'undefined' && Array.isArray(PLAN_PARTS)) ? PLAN_PARTS.flat() : [];
+    return src.map(normalizePhase);
+  })();
+
+  /* ---------- وضعیت ---------------------------------------------------- */
+  let state = {
+    v: 1, contentVersion: CONTENT_VERSION,
+    meta: { title: DEF_TITLE, sub: DEF_SUB },
+    plan: clone(DEFAULT_PLAN),
+    checks: {}, notes: {}, marks: { archived: {}, review: {} },
+    notebook: '',      // (سازگاری قدیمی) متن تجمیعی دفترچه — منبع اصلی nbNotes است
+    nbNotes: [],       // دفترچه چندیادداشتی: [{id,title,body,createdAt,updatedAt}]
+    nbActiveId: '',    // آخرین یادداشت بازشده (Last Note)
+    nbSecondaryId: '', // یادداشت دوم برای Split View
+    nbSplit: false,    // Split View خاموش است مگر کاربر روشن کند
+    nbMode: 'edit',    // حالت Edit/Read یادداشت اصلی
+    nbSecondaryMode: 'read', // حالت یادداشت دوم در Split View
+    nbView: 'list',    // نمای دفترچه: list | note
+    nbQuery: '',
+    nbFontScale: 1,
+    savedAt: '',
+    open: {},          // فازهای باز
+    openNotes: {},     // پنل یادداشت های باز
+    ui: { q: '', filter: 'all', stack: '', editing: false, stale: false, nbOpen: false, nbPreview: true, reportMode: 'full', phaseNavOpen: true, sidebarLayout: 'dual-right', phaseDrawerOpen: false, phaseDrawerQuery: '', fontScale: 1, sideOpen: {}, sideStepOpen: {}, sideClosed: { dev: true }, markFilters: [] }
+  };
+
+  function load() {
+    const raw = store.get();
+    if (!raw) return;
+    try {
+      const d = JSON.parse(raw);
+      if (!d || typeof d !== 'object') return;
+      if (d.meta) state.meta = Object.assign(state.meta, d.meta);
+      if (Array.isArray(d.plan) && d.plan.length) state.plan = d.plan.map(normalizePhase);
+      state.checks = d.checks || {};
+      state.notes = d.notes || {};
+      if (d.marks) state.marks = { archived: d.marks.archived || {}, review: d.marks.review || {} };
+      state.open = d.open || {};
+      state.openNotes = d.openNotes || {};
+      state.notebook = typeof d.notebook === 'string' ? d.notebook : '';
+      if (Array.isArray(d.nbNotes)) state.nbNotes = d.nbNotes.map(nbNormalizeNote).filter(Boolean);
+      state.nbActiveId = d.nbActiveId || '';
+      state.nbSecondaryId = d.nbSecondaryId || '';
+      state.nbSplit = !!d.nbSplit;
+      state.nbMode = d.nbMode === 'read' ? 'read' : 'edit';
+      state.nbSecondaryMode = d.nbSecondaryMode === 'edit' ? 'edit' : 'read';
+      state.nbView = d.nbView || 'list';
+      state.nbQuery = d.nbQuery || '';
+      state.nbFontScale = clampScale(d.nbFontScale, 1);
+      state.ui.fontScale = clampScale(d.ui && d.ui.fontScale, 1);
+      state.ui.sidebarLayout = validSidebarLayout(d.ui && d.ui.sidebarLayout);
+      state.ui.phaseDrawerOpen = false;
+      state.savedAt = d.savedAt || '';
+      state.ui.editing = false;
+      if (d.ui) {
+        state.ui.nbOpen = !!d.ui.nbOpen; state.ui.nbPreview = d.ui.nbPreview !== false; state.ui.reportMode = d.ui.reportMode || 'full';
+        state.ui.phaseNavOpen = d.ui.phaseNavOpen !== false;
+        state.ui.phaseNavScroll = Number(d.ui.phaseNavScroll) || 0;
+        state.ui.sidebarLayout = validSidebarLayout(d.ui.sidebarLayout);
+        state.ui.phaseDrawerQuery = typeof d.ui.phaseDrawerQuery === 'string' ? d.ui.phaseDrawerQuery : '';
+        state.ui.fontScale = clampScale(d.ui.fontScale, 1);
+        state.ui.sideOpen = d.ui.sideOpen || {};
+        state.ui.sideStepOpen = d.ui.sideStepOpen || {};
+        if (Array.isArray(d.ui.markFilters)) state.ui.markFilters = d.ui.markFilters.filter(x => x === 'archived' || x === 'review');
+        state.ui.sideClosed = Object.assign({ dev: true }, d.ui.sideClosed || {});
+      }
+      nbMigrate();
+      state.ui.stale = !!(d.contentVersion && d.contentVersion !== CONTENT_VERSION);
+      // اگر محتوا به روز شده و کاربر ساختار را دست کاری نکرده، خودکار به روزرسانی کن
+      if (state.ui.stale && !d.customized) {
+        state.plan = clone(DEFAULT_PLAN);
+        state.contentVersion = CONTENT_VERSION;
+        state.ui.stale = false;
+      }
+    } catch (e) { /* داده خراب → پیش فرض */ }
+  }
+
+  let saveTimer = null;
+  function saveNow() {
+    state.contentVersion = CONTENT_VERSION;
+    state.savedAt = new Date().toISOString();
+    try { store.set(JSON.stringify(state)); } catch (e) { }
+    if (fileStore.connected) fileStore.save();   // ذخیره خودکار در answers-roadmap.json
+  }
+  function save() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 280); }
+  window.addEventListener('beforeunload', saveNow);
+
+  /* ---------- شمارش ها -------------------------------------------------- */
+  function stepDone(s) {
+    if (!s.subs.length) return !!state.checks[s.id];
+    return s.subs.every(x => !!state.checks[x.id]) && !!state.checks[s.id];
+  }
+  function stepPartial(s) {
+    return s.subs.some(x => !!state.checks[x.id]) && !stepDone(s);
+  }
+  function hasNote(s) {
+    return !!state.notes['n:' + s.id] || s.subs.some(x => !!state.notes['n:' + x.id]);
+  }
+  function counts(phase) {
+    let d = 0, t = 0, notes = 0;
+    (phase ? [phase] : state.plan).forEach(ph => {
+      ph.steps.forEach(s => {
+        t++; if (state.checks[s.id]) d++;
+        if (state.notes['n:' + s.id]) notes++;
+        s.subs.forEach(x => {
+          t++; if (state.checks[x.id]) d++;
+          if (state.notes['n:' + x.id]) notes++;
+        });
+      });
+    });
+    return { d, t, notes, p: pct(d, t) };
+  }
+
+  /* ---------- به روزرسانی سبک (بدون رندر کامل) ------------------------- */
+  function refreshStep(sid, opts) {
+    const f = findStep(sid); if (!f) return;
+    const el = document.getElementById(sid);
+    if (el) {
+      const done = stepDone(f.s), part = stepPartial(f.s);
+      el.classList.toggle('done', done);
+      const cb = el.querySelector('.st-head input[data-ck]'); if (cb) cb.checked = done;
+      const tag = el.querySelector('[data-subcount]');
+      if (tag) tag.textContent = fa(f.s.subs.filter(x => state.checks[x.id]).length) + ' از ' + fa(f.s.subs.length) + ' زیرمرحله';
+      const pt = el.querySelector('[data-partial]'); if (pt) pt.style.display = part ? '' : 'none';
+      if (!opts || opts.subs !== false) {
+        f.s.subs.forEach(x => {
+          const li = document.getElementById(x.id);
+          if (!li) return;
+          li.classList.toggle('done', !!state.checks[x.id]);
+          const c = li.querySelector('input[data-ck]');
+          if (c) c.checked = !!state.checks[x.id];
+        });
+      }
+    }
+    refreshPhase(f.ph.id);
+  }
+  function refreshPhase(phId) {
+    const ph = findPhase(phId); if (!ph) return;
+    const c = counts(ph);
+    $$('[data-pbar="' + phId + '"]').forEach(e => e.style.width = c.p + '%');
+    $$('[data-ppct="' + phId + '"]').forEach(e => e.innerHTML = fa(c.p) + '٪ <small>پیشرفت</small>');
+    $$('[data-nav="' + phId + '"]').forEach(e => e.textContent = fa(c.d) + '/' + fa(c.t));
+    const b = document.querySelector('[data-phbadge="' + phId + '"]');
+    if (b) {
+      const done = c.t > 0 && c.d === c.t;
+      b.className = 'ph-badge' + (done ? ' ok' : '');
+      b.textContent = done ? 'کامل شد ✓' : fa(c.d) + '/' + fa(c.t);
+    }
+    const sect = document.getElementById(phId);
+    if (sect) {
+      sect.classList.toggle('done', c.t > 0 && c.d === c.t);
+      const phaseBox = sect.querySelector('.ph-ck input[data-ck]');
+      if (phaseBox) {
+        phaseBox.checked = c.t > 0 && c.d === c.t;
+        phaseBox.indeterminate = c.d > 0 && c.d < c.t;
+      }
+    }
+    updateStats();
+  }
+
+  /* ---------- نشان ها: آرشیو و نیازمند بررسی ------------------------------
+   * state.marks = { archived: {entityId: true}, review: {entityId: true} }
+   * entityId می تواند شناسه فاز، مرحله یا زیرمرحله باشد.
+   * آرشیو شده ها در نمای اصلی دیده نمی شوند؛ با فیلتر «آرشیو» برمی گردند.
+   * نیازمند بررسی در صفحه اصلی می ماند و فقط با نشان مشخص می شود.
+   * --------------------------------------------------------------------- */
+  function isArchived(id) { return !!(state.marks && state.marks.archived && state.marks.archived[id]); }
+  function needsReview(id) { return !!(state.marks && state.marks.review && state.marks.review[id]); }
+  function markFiltersOn() { return Array.isArray(state.ui.markFilters) && state.ui.markFilters.length > 0; }
+  function archivedFilterOn() { return Array.isArray(state.ui.markFilters) && state.ui.markFilters.indexOf('archived') !== -1; }
+  function entityHasFilterMark(ph, s, x) {
+    if (!markFiltersOn()) return true;
+    return state.ui.markFilters.some(kind => {
+      const bag = state.marks && state.marks[kind];
+      if (!bag) return false;
+      return !!(bag[ph.id] || (s && bag[s.id]) || (x && bag[x.id]) || (s && !x && s.subs.some(z => bag[z.id])));
+    });
+  }
+  function stepArchivedHidden(ph, s) {
+    if (state.ui.editing) return false;
+    if (!isArchived(ph.id) && !isArchived(s.id)) return false;
+    return !archivedFilterOn();
+  }
+  function subArchivedHidden(ph, s, x) {
+    if (state.ui.editing) return false;
+    if (!isArchived(ph.id) && !isArchived(s.id) && !isArchived(x.id)) return false;
+    return !archivedFilterOn();
+  }
+  function subShown(ph, s, x) {
+    if (state.ui.editing) return true;
+    if (subArchivedHidden(ph, s, x)) return false;
+    if (!markFiltersOn()) return true;
+    return entityHasFilterMark(ph, s, x);
+  }
+  function markCount(kind) {
+    const bag = (state.marks && state.marks[kind]) || {};
+    let n = 0;
+    state.plan.forEach(ph => {
+      if (bag[ph.id]) n++;
+      ph.steps.forEach(s => { if (bag[s.id]) n++; s.subs.forEach(x => { if (bag[x.id]) n++; }); });
+    });
+    return n;
+  }
+  function markBadges(id) {
+    let h = '';
+    if (needsReview(id)) h += '<span class="tag review-tag" title="در فهرست نیازمند بررسی است">' + I('flag') + ' نیازمند بررسی</span>';
+    if (isArchived(id)) h += '<span class="tag arch-tag" title="آرشیو شده است">' + I('archive') + ' آرشیو شده</span>';
+    return h;
+  }
+  function entityBtn(etype, eid) {
+    return '<button class="iact ent-btn" data-act="entity-menu" data-etype="' + etype + '" data-eid="' + esc(eid) + '" title="منوی عملیات: آرشیو، نیازمند بررسی، اشتراک و دفترچه" aria-label="باز کردن منوی عملیات">' + I('more') + '</button>';
+  }
+  function findEntity(etype, eid) {
+    if (etype === 'phase') { const ph = findPhase(eid); return ph ? { type: 'phase', ph: ph, label: phaseNumLabel(ph) + ' — ' + stripPhasePrefix(ph.title) } : null; }
+    if (etype === 'step') { const f = findStep(eid); return f ? { type: 'step', ph: f.ph, s: f.s, label: stepNumLabel(f.ph, f.ph.steps.indexOf(f.s)) + ' — ' + stripStepPrefix(f.s.title) } : null; }
+    if (etype === 'sub') {
+      const f = findStepOfSub(eid);
+      if (!f) return null;
+      const x = f.s.subs.filter(z => z.id === eid)[0];
+      return x ? { type: 'sub', ph: f.ph, s: f.s, x: x, label: subNumLabel(f.ph, f.ph.steps.indexOf(f.s), f.s.subs.indexOf(x)) + ' — ' + x.title } : null;
+    }
+    // تشخیص خودکار بر اساس شناسه
+    return findEntity('phase', eid) || findEntity('step', eid) || findEntity('sub', eid);
+  }
+
+  /* ---------- جست وجو و فیلتر ------------------------------------------- */
+  function hayOf(ph, s) {
+    const si = ph.steps.indexOf(s);
+    const sig = ph.id + ':' + si + ':' + state.plan.indexOf(ph);
+    let h = HAY.get(s);
+    if (h == null || h.phId !== sig) {
+      const parts = [phaseNumLabel(ph), stripPhasePrefix(ph.title), ph.goal, stepNumLabel(ph, si), stripStepPrefix(s.title), s.meta, s.tip, s.stack || ''];
+      s.subs.forEach((x, i) => { parts.push(subNumLabel(ph, si, i)); parts.push(x.title); });
+      h = norm(parts.join(' \u00b6 '));
+      HAY.set(s, { phId: sig, t: h });
+      return h;
+    }
+    return h.t;
+  }
+  function hitObj(ph, s) {
+    const q = norm(state.ui.q);
+    if (!q) return true;
+    return hayOf(ph, s).indexOf(q) !== -1;
+  }
+  function hitStack(ph, s) {
+    const st = norm(state.ui.stack);
+    if (!st) return true;
+    return hayOf(ph, s).indexOf(st) !== -1;
+  }
+  function visible(s) {
+    const f = state.ui.filter;
+    if (f === 'todo') return !stepDone(s);
+    if (f === 'done') return stepDone(s);
+    if (f === 'notes') return hasNote(s);
+    return true;
+  }
+  function matchesAll(ph, s) {
+    if (stepArchivedHidden(ph, s)) return false;
+    if (markFiltersOn() && !entityHasFilterMark(ph, s, null)) return false;
+    return visible(s) && hitObj(ph, s) && hitStack(ph, s);
+  }
+  function isFiltering() { return !!state.ui.q.trim() || state.ui.filter !== 'all' || !!state.ui.stack || markFiltersOn(); }
+  function stackCount(st) {
+    let n = 0;
+    const t = norm(st);
+    state.plan.forEach(ph => ph.steps.forEach(s => { if (hayOf(ph, s).indexOf(t) !== -1) n++; }));
+    return n;
+  }
+
+  /* ---------- هایلایت استک فعال + شماره گذاری خودکار ----------------------
+   * وقتی فیلتر استک فعال است، خودِ کلمه استک در عنوان/نکته/زیرمرحله ها با
+   * <mark class="hl-stack"> برجسته می شود تا کاربر دلیل نمایش هر مرحله را ببیند.
+   * شماره فاز/مرحله/زیرمرحله «محاسباتی» است (از روی جایگاه فعلی در آرایه)؛
+   * پس با افزودن، حذف یا جابه جایی، همه شماره ها خودکار اصلاح می شوند و
+   * هیچ شماره ای داخل متن عنوان به صورت دستی ذخیره نمی شود.
+   * --------------------------------------------------------------------- */
+  function hiStack(text) {
+    const raw = String(text == null ? '' : text);
+    const term = String(state.ui.stack || '').trim();
+    if (!term || state.ui.editing) return esc(raw);
+    const low = raw.toLowerCase(), tl = term.toLowerCase();
+    let out = '', i = 0, j = low.indexOf(tl);
+    if (j === -1) return esc(raw);
+    while (j !== -1) {
+      out += esc(raw.slice(i, j)) + '<mark class="hl-stack">' + esc(raw.slice(j, j + term.length)) + '</mark>';
+      i = j + term.length; j = low.indexOf(tl, i);
+    }
+    return out + esc(raw.slice(i));
+  }
+  function isAppendixPhase(ph) {
+    return !!ph && (ph.id === 'ap' || /^\s*پیوست/.test(String(ph.title || '')));
+  }
+  function phaseOrdinal(ph) {
+    let n = 0;
+    for (const p of state.plan) {
+      if (isAppendixPhase(p)) continue;
+      n++;
+      if (p.id === ph.id) return n;
+    }
+    return null;
+  }
+  function phaseNumLabel(ph) {
+    if (isAppendixPhase(ph)) return 'پیوست';
+    const n = phaseOrdinal(ph);
+    return 'فاز ' + fa(n == null ? 0 : n);
+  }
+  function stripPhasePrefix(title) {
+    return String(title || '').replace(/^\s*فاز\s*[۰-۹0-9]+\s*[—\-–:]\s*/, '').replace(/^\s*پیوست ها\s*[—\-–:]\s*/, '');
+  }
+  function stripStepPrefix(title) {
+    return String(title || '').replace(/^\s*(پیوست|مرحله|گام)\s*[۰-۹0-9]+\s*[—\-–:]\s*/, '');
+  }
+  function stepNumLabel(ph, si) {
+    if (isAppendixPhase(ph)) return fa(si + 1);
+    const n = phaseOrdinal(ph);
+    return fa(n == null ? 0 : n) + '.' + fa(si + 1);
+  }
+  function subNumLabel(ph, si, i) {
+    if (isAppendixPhase(ph)) return fa(i + 1);
+    const n = phaseOrdinal(ph);
+    return fa(n == null ? 0 : n) + '.' + fa(si + 1) + '.' + fa(i + 1);
+  }
+
+
+  /* ---------- منوی عملیات هر مورد و ناوبری مطمئن -------------------------
+   * برای شلوغ نشدن صفحه، هر فاز و مرحله و زیرمرحله فقط یک دکمه کوچک «...»
+   * دارد و چهار عمل در یک منوی شناور باز می شود:
+   * آرشیو | نیازمند بررسی | اشتراک با URL | اضافه کردن به دفترچه
+   * --------------------------------------------------------------------- */
+  let entCtx = null;
+  let entityMenuEl = null;
+  function entMenuMount() {
+    if (entityMenuEl) return;
+    const d = document.createElement('div');
+    d.id = 'entityMenu';
+    d.className = 'entity-menu';
+    d.hidden = true;
+    document.body.appendChild(d);
+    entityMenuEl = d;
+    d.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-entact]'); if (!b || !entCtx) return;
+      const act = b.dataset.entact, ctx = entCtx;
+      closeEntityMenu();
+      if (act === 'archive') toggleEntityMark('archived', ctx);
+      else if (act === 'review') toggleEntityMark('review', ctx);
+      else if (act === 'share') shareEntity(ctx);
+      else if (act === 'notebook') addEntityToNotebook(ctx);
+    });
+    document.addEventListener('click', (e) => {
+      if (entityMenuEl && !entityMenuEl.hidden && !e.target.closest('#entityMenu') && !e.target.closest('[data-act="entity-menu"]')) closeEntityMenu();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEntityMenu(); });
+    window.addEventListener('resize', closeEntityMenu);
+  }
+  function closeEntityMenu() { if (entityMenuEl) entityMenuEl.hidden = true; entCtx = null; }
+  function openEntityMenu(btn, etype, eid) {
+    entMenuMount();
+    const ent = findEntity(etype, eid);
+    if (!ent) { toast('این مورد پیدا نشد.'); return; }
+    entCtx = { type: etype, id: eid };
+    const arch = isArchived(eid), rev = needsReview(eid);
+    entityMenuEl.innerHTML =
+      '<div class="em-head"><b>' + esc(ent.label) + '</b><span>' + (etype === 'phase' ? 'فاز' : (etype === 'step' ? 'مرحله' : 'زیرمرحله')) + '</span></div>' +
+      '<button data-entact="archive">' + I('archive') + (arch ? ' خروج از آرشیو' : ' آرشیو') + (arch ? '<b>فعال است</b>' : '') + '</button>' +
+      '<button data-entact="review">' + I('flag') + (rev ? ' حذف از نیازمند بررسی' : ' نیازمند بررسی') + (rev ? '<b>فعال است</b>' : '') + '</button>' +
+      '<button data-entact="share">' + I('share') + ' اشتراک با URL</button>' +
+      '<button data-entact="notebook">' + I('note') + ' اضافه کردن به دفترچه</button>';
+    entityMenuEl.hidden = false;
+    const r = btn.getBoundingClientRect();
+    const w = 264;
+    let left = r.right - w;
+    if (left < 8) left = 8;
+    if (left + w > window.innerWidth - 8) left = window.innerWidth - w - 8;
+    let top = r.bottom + 6;
+    if (top + 250 > window.innerHeight) top = Math.max(8, r.top - 256);
+    entityMenuEl.style.left = left + 'px';
+    entityMenuEl.style.top = top + 'px';
+  }
+  function toggleEntityMark(kind, ctx) {
+    if (!state.marks) state.marks = { archived: {}, review: {} };
+    if (!state.marks[kind]) state.marks[kind] = {};
+    const on = !!state.marks[kind][ctx.id];
+    if (on) delete state.marks[kind][ctx.id]; else state.marks[kind][ctx.id] = true;
+    saveNow(); render();
+    if (kind === 'archived') toast(on ? 'از آرشیو خارج شد و در صفحه اصلی دیده می شود.' : 'آرشیو شد؛ با فیلتر «آرشیو» در هدر یا سایدبار دوباره دیده می شود.');
+    else toast(on ? 'از فهرست نیازمند بررسی حذف شد.' : 'به فهرست نیازمند بررسی اضافه شد.');
+  }
+  function entityShareUrl(ctx) {
+    const base = String(location.href || '').split('#')[0];
+    return base + '#item=' + encodeURIComponent(ctx.type + ':' + ctx.id);
+  }
+  function shareEntity(ctx) {
+    const ent = findEntity(ctx.type, ctx.id); if (!ent) return;
+    const url = entityShareUrl(ctx);
+    try { history.replaceState(null, '', '#item=' + encodeURIComponent(ctx.type + ':' + ctx.id)); } catch (e) { }
+    const title = ent.label;
+    const done = () => toast('لینک اشتراک کپی شد: ' + url);
+    const copyIt = () => {
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, () => fallbackCopy(url, done));
+      else fallbackCopy(url, done);
+    };
+    try {
+      if (navigator.share) {
+        navigator.share({ title: title, text: title, url: url }).then(() => toast('اشتراک گذاری انجام شد.'), (e) => { if (!e || e.name !== 'AbortError') copyIt(); });
+        return;
+      }
+    } catch (e) { }
+    copyIt();
+  }
+  function addEntityToNotebook(ctx) {
+    const ent = findEntity(ctx.type, ctx.id); if (!ent) return;
+    nbMigrate();
+    const lines = [];
+    let title = ent.label;
+    if (ent.type === 'phase') {
+      lines.push('# ' + ent.label, '');
+      if (ent.ph.goal) lines.push('> ' + ent.ph.goal, '');
+      if (ent.ph.dod) lines.push('**شرط اتمام فاز:** ' + ent.ph.dod, '');
+      ent.ph.steps.forEach((s, si) => {
+        lines.push('## ' + stepNumLabel(ent.ph, si) + ' — ' + stripStepPrefix(s.title));
+        s.subs.forEach((x, i) => lines.push('- [' + (state.checks[x.id] ? 'x' : ' ') + '] ' + subNumLabel(ent.ph, si, i) + ' ' + x.title));
+        lines.push('');
+      });
+    } else if (ent.type === 'step') {
+      const s = ent.s, si = ent.ph.steps.indexOf(s);
+      lines.push('# ' + ent.label, '', '**فاز:** ' + phaseNumLabel(ent.ph) + ' — ' + stripPhasePrefix(ent.ph.title));
+      if (s.meta) lines.push('**مشخصات:** ' + s.meta);
+      if (s.stack) lines.push('**استک:** ' + s.stack);
+      if (s.tip) lines.push('', '> نکته: ' + s.tip);
+      lines.push('', '## زیرمرحله ها');
+      s.subs.forEach((x, i) => lines.push('- [' + (state.checks[x.id] ? 'x' : ' ') + '] ' + subNumLabel(ent.ph, si, i) + ' ' + x.title));
+      const n = state.notes['n:' + s.id];
+      if (n) lines.push('', '## یادداشت فعلی مرحله', n);
+    } else {
+      const s = ent.s, x = ent.x, si = ent.ph.steps.indexOf(s);
+      lines.push('# ' + ent.label, '', '**فاز:** ' + phaseNumLabel(ent.ph) + ' — ' + stripPhasePrefix(ent.ph.title));
+      lines.push('**مرحله:** ' + stepNumLabel(ent.ph, si) + ' — ' + stripStepPrefix(s.title));
+      lines.push('**وضعیت:** ' + (state.checks[x.id] ? 'انجام شده' : 'باقی مانده'));
+      const n = state.notes['n:' + x.id];
+      if (n) lines.push('', '## یادداشت فعلی زیرمرحله', n);
+    }
+    lines.push('', '---', 'لینک این مورد: ' + entityShareUrl(ctx));
+    const now = new Date().toISOString();
+    const note = { id: uid('nb'), title: title.slice(0, 80), body: lines.join('\n'), createdAt: now, updatedAt: now };
+    state.nbNotes.push(note);
+    state.nbActiveId = note.id;
+    state.nbView = 'note';
+    state.nbMode = 'edit';
+    nbSyncLegacy(); saveNow();
+    if (!state.ui.nbOpen) nbToggle(true); else nbRender();
+    toast('به دفترچه اضافه شد و به صورت یک نوشته جدید باز شد.');
+  }
+
+  /* ناوبری مطمئن سایدبار و لینک مستقیم: حتی بعد از چند جستجو و فیلتر،
+   * اگر مورد با فیلتر فعلی پنهان باشد فیلتر ها پاک می شوند و مورد باز می شود. */
+  function scrollToId(id) {
+    const doScroll = () => {
+      const el = document.getElementById(id);
+      if (!el) return false;
+      const ph = el.closest ? el.closest('.phase') : null;
+      if (ph) ph.classList.add('open');
+      const r = el.getBoundingClientRect();
+      const offset = el.classList.contains('phase') ? 106 : (el.classList.contains('step') ? 128 : 150);
+      const target = Math.max(0, window.scrollY + r.top - offset);
+      // jump is deliberate for long pages: a very long smooth animation looked like a failed nav
+      const root = document.documentElement, old = root.style.scrollBehavior;
+      root.style.scrollBehavior = 'auto';
+      try { window.scrollTo(0, target); } catch (e) { try { el.scrollIntoView({ behavior: 'instant', block: 'start' }); } catch (_) { if (el.scrollIntoView) el.scrollIntoView(); } }
+      root.style.scrollBehavior = old;
+      el.classList.add('hit');
+      setTimeout(() => el.classList.remove('hit'), 1800);
+      return true;
+    };
+    if (!doScroll()) { setTimeout(doScroll, 80); setTimeout(doScroll, 260); }
+    else { requestAnimationFrame(() => requestAnimationFrame(doScroll)); }
+  }
+  function navigateToEntity(etype, eid) {
+    const ent = findEntity(etype, eid);
+    if (!ent) { toast('این مورد در نقشه راه پیدا نشد.'); return false; }
+    const targetId = eid;
+    const arch = isArchived(ent.ph.id) || (ent.s && isArchived(ent.s.id)) || (ent.x && isArchived(ent.x.id));
+    // پاک کردن فیلتر هایی که مورد را پنهان می کنند
+    state.ui.q = '';
+    state.ui.filter = 'all';
+    state.ui.stack = '';
+    state.ui.markFilters = arch ? ['archived'] : [];
+    state.open[ent.ph.id] = true;
+    if (!state.ui.sideOpen) state.ui.sideOpen = {};
+    state.ui.sideOpen[ent.ph.id] = true;
+    save(); render();
+    scrollToId(targetId);
+    return true;
+  }
+  function handleDeepLink() {
+    const raw = String(location.hash || '').replace(/^#/, '');
+    if (!raw) return;
+    let m = null;
+    try { m = decodeURIComponent(raw).match(/item=(phase|step|sub):(.+)$/); } catch (e) { }
+    if (m) { navigateToEntity(m[1], m[2]); return; }
+    if (document.getElementById(raw)) navigateToEntity('auto', raw);
+  }
+
+
+  /* ---------- رندر ------------------------------------------------------ */
+  const ED = () => state.ui.editing ? 'contenteditable="true" spellcheck="false"' : '';
+
+  function renderInlineText(text, allowBlockCode) {
+    const value = String(text == null ? '' : text);
+    if (state.ui.editing) return esc(value).replace(/\n/g, '<br>');
+    if (allowBlockCode && /(?:^|\n)\s*(```|~~~)/.test(value)) return mdToHtml(value);
+    return mdInline(value);
+  }
+  function renderBlockText(text) {
+    if (state.ui.editing) return esc(text).replace(/\n/g, '<br>');
+    return mdToHtml(String(text == null ? '' : text));
+  }
+
+  function metaTags(meta) {
+    if (!meta) return '';
+    const parts = String(meta).split('·').map(x => x.trim()).filter(Boolean);
+    return parts.map((p, i) => '<span class="tag ' + (i === 0 ? 'time' : 'owner') + '">' + esc(p) + '</span>').join('');
+  }
+
+  function insertPositionControl(kind, max) {
+    const labels = { phase:'فاز', step:'مرحله', sub:'زیرمرحله' };
+    const label = labels[kind] || 'مورد';
+    return '<label class="insert-position" title="شماره محل درج از ۱ تا ' + fa(max) + '؛ خالی یعنی افزودن عادی">' +
+      '<span>محل درج</span><input type="text" inputmode="numeric" pattern="[0-9۰-۹٠-٩]*" maxlength="6" data-insert-position="' + kind + '" aria-label="محل درج ' + label + '" placeholder="خالی" autocomplete="off" autocapitalize="off"></label>';
+  }
+
+  function notePanel(key, value, ph, small) {
+    const open = !!state.openNotes[key];
+    return '<div class="note-wrap ' + (small ? 'subnote ' : '') + (open ? 'show' : '') + '">' +
+      '<label><span>' + (small ? 'یادداشت این زیرمرحله' : 'یادداشت این مرحله') + '</span>' +
+      '<span class="cnt">' + (value ? 'ذخیره شد ✍️' : 'خالی') + '</span></label>' +
+      '<textarea class="note ' + (value ? 'has' : '') + '" data-note="n:' + esc(key) + '" placeholder="' +
+      (small ? 'نکته فنی، عدد، لینک یا تعریف دقیق تر این زیرمرحله…' : 'یادداشت اجرایی: تصمیم ها، لینک ها، رمزها، نام مسئول، تاریخ…') + '">' + esc(value || '') + '</textarea>' +
+      '</div>';
+  }
+
+  function subHTML(ph, s, x, i, si) {
+    const done = !!state.checks[x.id];
+    const nk = 'n:' + x.id;
+    const nv = state.notes[nk] || '';
+    const stepIdx = (typeof si === 'number') ? si : ph.steps.indexOf(s);
+    return '<li class="sub ' + (done ? 'done' : '') + (isArchived(x.id) ? ' is-archived' : '') + (needsReview(x.id) ? ' needs-review' : '') + '" id="' + esc(x.id) + '">' +
+      '<div class="sub-row">' +
+      '<label class="ck sm"><input type="checkbox" data-ck="' + esc(x.id) + '" ' + (done ? 'checked' : '') + '><span class="box"></span></label>' +
+      '<span class="sub-num" title="شماره خودکار زیرمرحله">' + subNumLabel(ph, stepIdx, i) + '</span>' +
+      '<button class="iact tiny note-ind ' + (nv ? 'note-on' : '') + '" data-act="note-toggle" data-key="' + esc(nk) + '" title="باز کردن یادداشت این زیرمرحله" aria-label="باز کردن یادداشت این زیرمرحله">' + I('note') + '<span class="note-label">یادداشت</span></button>' +
+      '<div class="sub-t" data-field="sub" data-id="' + esc(s.id) + '" data-sub="' + i + '" ' + ED() + '>' + renderInlineText(x.title, true) + '</div>' + markBadges(x.id) + entityBtn('sub', x.id) +
+      '<span class="acts-edit">' +
+      '<button class="iact tiny" data-act="move-sub" data-id="' + esc(s.id) + '" data-sub="' + i + '" data-dir="-1" title="بالا">' + I('up') + '</button>' +
+      '<button class="iact tiny" data-act="move-sub" data-id="' + esc(s.id) + '" data-sub="' + i + '" data-dir="1" title="پایین">' + I('down') + '</button>' +
+      '<button class="iact tiny d" data-act="del-sub" data-id="' + esc(s.id) + '" data-sub="' + i + '" title="حذف زیرمرحله">' + I('x') + '</button>' +
+      '</span>' +
+      '</div>' +
+      notePanel(x.id, nv, ph, true) +
+      '</li>';
+  }
+
+  function stepHTML(ph, s, si) {
+    const done = stepDone(s), part = stepPartial(s);
+    const nk = 'n:' + s.id, nv = state.notes[nk] || '';
+    const subStatus = s.subs.length
+      ? '<span class="tag" data-subcount="' + esc(s.id) + '">' + fa(s.subs.filter(x => state.checks[x.id]).length) + ' از ' + fa(s.subs.length) + ' زیرمرحله</span>'
+      : '';
+    const partTag = '<span class="tag" data-partial="' + esc(s.id) + '" style="color:#ffe6b0;border-color:rgba(245,158,11,.35);display:' + (part ? '' : 'none') + '">نیمه کاره</span>';
+    return '<article class="step ' + (done ? 'done' : '') + (isArchived(s.id) ? ' is-archived' : '') + (needsReview(s.id) ? ' needs-review' : '') + '" id="' + esc(s.id) + '">' +
+      '<div class="st-head">' +
+      '<label class="ck" title="تکمیل شد"><input type="checkbox" data-ck="' + esc(s.id) + '" ' + (done ? 'checked' : '') + '><span class="box"></span></label>' +
+      '<span class="st-num" title="شماره خودکار مرحله">' + stepNumLabel(ph, si) + '</span>' +
+      '<div class="st-main">' +
+      '<div class="st-title" data-field="title" data-id="' + esc(s.id) + '" ' + ED() + '>' + renderInlineText(stripStepPrefix(s.title)) + '</div>' +
+      '<div class="st-meta">' + metaTags(s.meta) +
+      (s.stack ? '<button class="tag stk' + (state.ui.stack && norm(state.ui.stack) === norm(s.stack) ? ' hl-tag' : '') + '" data-act="stack-filter" data-id="' + esc(s.stack) + '" title="فیلتر بر اساس این استک">' + hiStack(s.stack) + '</button>' : '') + subStatus + partTag +
+      (state.ui.editing ? '<input class="tag" data-meta="' + esc(s.id) + '" value="' + esc(s.meta) + '" placeholder="≈ زمان · مسئول" style="min-width:230px;background:rgba(7,11,20,.6);color:var(--tx);padding:3px 10px;font-family:inherit;font-size:calc(11px * var(--font-scale,1));text-align:center">' : '') +
+      markBadges(s.id) +
+      (nv ? '<span class="tag" style="color:#c8fff4;border-color:rgba(45,212,191,.35)">' + I('note') + ' یادداشت دارد</span>' : '') +
+      '</div></div>' +
+      '<div class="acts-edit">' +
+      '<button class="iact" data-act="move-step" data-id="' + esc(s.id) + '" data-dir="-1" title="جابه جایی مرحله">' + I('up') + '</button>' +
+      '<button class="iact" data-act="move-step" data-id="' + esc(s.id) + '" data-dir="1" title="جابه جایی مرحله">' + I('down') + '</button>' +
+      '<button class="iact d" data-act="del-step" data-id="' + esc(s.id) + '" title="حذف مرحله">' + I('x') + ' حذف</button>' +
+      '</div>' + entityBtn('step', s.id) +
+      '</div>' +
+      (s.tip ? '<div class="tip"><span class="ti">' + I('bulb') + '</span><div class="tip-content md" data-field="tip" data-id="' + esc(s.id) + '" ' + ED() + '>' + renderBlockText(s.tip) + '</div></div>' : (state.ui.editing ? '<div class="tip"><span class="ti">' + I('bulb') + '</span><div class="tip-content md" data-field="tip" data-id="' + esc(s.id) + '" ' + ED() + '>نکته تجربی این مرحله را اینجا بنویس…</div></div>' : '')) +
+      '<ul class="subs">' + s.subs.map((x, i) => subShown(ph, s, x) ? subHTML(ph, s, x, i, si) : '').join('') + '</ul>' +
+      '<div class="acts">' +
+      '<button class="iact ' + (nv ? 'note-on' : '') + '" data-act="note-toggle" data-key="' + esc(nk) + '">' + I('note') + ' یادداشت مرحله</button>' +
+      '<span class="acts-edit">' +
+      '<span class="insert-action-group">' + insertPositionControl('sub', s.subs.length + 1) + '<button class="iact" data-act="add-sub" data-id="' + esc(s.id) + '" data-after="-1">' + I('plus') + ' زیرمرحله</button></span>' +
+      '<button class="iact" data-act="add-tip" data-id="' + esc(s.id) + '">' + I('bulb') + ' نکته</button>' +
+      '</span>' +
+      '</div>' +
+      notePanel(s.id, nv, ph, false) +
+      '</article>';
+  }
+
+  function phaseHTML(ph, pi) {
+    const c = counts(ph), done = c.t > 0 && c.d === c.t;
+    const partial = c.d > 0 && c.d < c.t;
+    const color = COLORS[pi % COLORS.length];
+    const isOpen = !!state.open[ph.id] || isFiltering();
+    const steps = ph.steps.filter(s => matchesAll(ph, s) || state.ui.editing);
+    const visibleCount = steps.length;
+    return '<section class="phase ' + (isOpen ? 'open' : '') + ' ' + (done ? 'done' : '') + (isArchived(ph.id) ? ' is-archived' : '') + (needsReview(ph.id) ? ' needs-review' : '') + '" id="' + esc(ph.id) + '" data-phase="' + esc(ph.id) + '" style="--c:' + color + '">' +
+      '<div class="ph-head" data-act="toggle-phase" data-id="' + esc(ph.id) + '">' +
+      '<label class="ck ph-ck" title="تکمیل همه مرحله ها و زیرمرحله های این فاز" aria-label="تکمیل فاز ' + esc(phaseNumLabel(ph)) + '"><input type="checkbox" data-ck="' + esc(ph.id) + '" ' + (done ? 'checked' : '') + (partial ? ' data-partial-check="1"' : '') + '><span class="box"></span></label>' +
+      '<div class="ph-ico" data-field="icon" data-id="' + esc(ph.id) + '" title="نام آیکون (مثلاً: cart, flask, rocket)" ' + ED() + '>' + iconOf(ph.icon) + '</div>' +
+      '<div class="ph-main">' +
+      '<h2 class="ph-title"><span class="ph-num" title="شماره خودکار فاز">' + phaseNumLabel(ph) + '</span><span data-field="ptitle" data-id="' + esc(ph.id) + '" ' + ED() + '>' + esc(stripPhasePrefix(ph.title)) + '</span>' +
+      '<span class="ph-badge ' + (done ? 'ok' : '') + '" data-phbadge="' + esc(ph.id) + '">' + (done ? 'کامل شد ✓' : fa(c.d) + '/' + fa(c.t)) + '</span>' + markBadges(ph.id) +
+      '</h2>' +
+      '<div class="ph-goal md" data-field="goal" data-id="' + esc(ph.id) + '" ' + ED() + '>' + renderBlockText(ph.goal) + '</div>' +
+      '</div>' +
+      '<div class="ph-side">' +
+      '<div class="ph-pct" data-ppct="' + esc(ph.id) + '">' + fa(c.p) + '٪ <small>پیشرفت</small></div>' +
+      '<div style="width:126px" class="pbar"><i style="width:' + c.p + '%" data-pbar="' + esc(ph.id) + '"></i></div>' +
+      entityBtn('phase', ph.id) +
+      '<span class="ph-caret">' + I('chev', 'caret') + '</span>' +
+      '</div></div>' +
+      '<div class="ph-body">' +
+      (ph.dod ? '<div class="dod"><div class="dod-head"><b>' + I('target') + ' شرط اتمام فاز:</b></div><div class="dod-body md" data-field="dod" data-id="' + esc(ph.id) + '" ' + ED() + '>' + renderBlockText(ph.dod) + '</div></div>' : '') +
+      (ph.steps.length === 0 ? '<div class="empty">این فاز هنوز مرحله ای ندارد — با دکمه «افزودن مرحله به این فاز» شروع کن.</div>'
+        : (!visibleCount && !state.ui.editing ? '<div class="empty">با فیلتر/جست وجوی فعلی، مرحله ای در این فاز دیده نمی شود.</div>' : '')) +
+      '<div class="editbar"><b>حالت ویرایش:</b> روی متن ها کلیک کن و مستقیم تایپ کن؛ Enter = تأیید.' +
+      '<span class="insert-action-group">' + insertPositionControl('step', ph.steps.length + 1) + '<button class="iact" data-act="add-step" data-id="' + esc(ph.id) + '">' + I('plus') + ' افزودن مرحله به این فاز</button></span>' +
+      '<span class="insert-action-group">' + insertPositionControl('phase', state.plan.length + 1) + '<button class="iact" data-act="add-phase" data-id="' + esc(ph.id) + '">' + I('plus') + ' افزودن فاز جدید</button></span>' +
+      '<button class="iact" data-act="move-phase" data-id="' + esc(ph.id) + '" data-dir="-1">' + I('up') + ' فاز</button>' +
+      '<button class="iact" data-act="move-phase" data-id="' + esc(ph.id) + '" data-dir="1">' + I('down') + ' فاز</button>' +
+      '<button class="iact d" data-act="del-phase" data-id="' + esc(ph.id) + '">' + I('trash') + ' حذف این فاز</button>' +
+      '</div>' +
+      '<div class="steps">' + steps.map((s, i) => stepHTML(ph, s, ph.steps.indexOf(s))).join('') + '</div>' +
+      '</div></section>';
+  }
+
+  function renderTop() {
+    const g = counts();
+    const C = 150.8;
+    const off = (C * (1 - g.p / 100)).toFixed(1);
+    const marks = ['all', 'todo', 'done', 'notes'];
+    const labels = { all: 'همه', todo: 'باقی مانده', done: 'انجام شده', notes: 'یادداشت دار' };
+    return '<div class="topbar">' +
+      '<div class="brand">' +
+      '<div class="ring"><svg width="56" height="56" viewBox="0 0 56 56">' +
+      '<defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#6366f1"/></linearGradient></defs>' +
+      '<circle class="bgc" cx="28" cy="28" r="24" stroke-width="5"/>' +
+      '<circle class="fgc" cx="28" cy="28" r="24" stroke-width="5" stroke-dasharray="' + C + '" stroke-dashoffset="' + off + '" data-ring="1"/>' +
+      '</svg><b data-stat="ringpct">' + fa(g.p) + '٪</b></div>' +
+      '<div style="min-width:0"><h1 data-field="mtitle" ' + ED() + '><span>' + esc(state.meta.title) + '</span></h1>' +
+      '<p data-field="msub" ' + ED() + '>' + esc(state.meta.sub) + '</p></div>' +
+      '<span class="brand-pill">' + esc(BRAND) + '</span>' +
+      '</div>' +
+      '<div class="search"><span class="ico">' + I('search') + '</span><input id="q" type="search" placeholder="جست وجو در مراحل، پلاگین ها، توضیحات…  ( / )" value="' + esc(state.ui.q) + '"></div>' +
+      '<div class="chips filters-main">' + marks.map(m => '<button class="chip ' + (state.ui.filter === m ? 'on' : '') + '" data-act="filter" data-id="' + m + '">' + labels[m] + '</button>').join('') + '</div>' +
+      '<div class="chips mark-chips filters-marks" aria-label="فیلتر نشان ها">' +
+        '<button class="chip mk ' + (archivedFilterOn() ? 'on' : '') + '" data-act="mark-filter" data-id="archived" title="فقط آرشیو شده ها را نشان بده">' + I('archive') + ' آرشیو <b data-mkcount="archived">' + fa(markCount('archived')) + '</b></button>' +
+        '<button class="chip mk ' + ((state.ui.markFilters || []).indexOf('review') !== -1 ? 'on' : '') + '" data-act="mark-filter" data-id="review" title="فقط نیازمند بررسی ها را نشان بده">' + I('flag') + ' نیازمند بررسی <b data-mkcount="review">' + fa(markCount('review')) + '</b></button>' +
+        (markFiltersOn() ? '<button class="chip mk clear" data-act="mark-clear" title="پاک کردن فیلتر نشان ها">پاک کردن نشان ها</button>' : '') +
+      '</div>' +
+      '<div class="tools header-actions">' +
+      sidebarLayoutButton('header') + fontScaleControls('ui','header') +
+      '<button class="btn edit-mode-btn ' + (state.ui.editing ? 'on' : '') + '" data-act="edit-mode" title="روشن یا خاموش کردن حالت ویرایش" aria-label="حالت ویرایش">' + I('edit') + '<span class="control-label">' + (state.ui.editing ? 'پایان ویرایش' : 'حالت ویرایش') + '</span></button>' +
+      '<button class="btn header-secondary" data-act="expand-all" title="باز کردن همه فازها">' + I('expand') + ' باز کردن همه</button>' +
+      '<button class="btn header-secondary" data-act="collapse-all" title="بستن همه فازها">' + I('collapse') + ' بستن همه</button>' +
+      (state.ui.stack ? '<button class="btn pri header-secondary" data-act="stack-clear">✕ پاک کردن فیلتر استک: ' + esc(state.ui.stack) + '</button>' : '') +
+      '<span class="menu-wrap">' +
+        '<button class="btn header-secondary" data-act="report-menu" title="گزارش Markdown">' + I('report') + ' گزارش MD <i class="caret">▾</i></button>' +
+        '<div class="menu-pop">' +
+          '<button data-act="report" data-id="done">✅ فقط انجام شده ها <b data-mcount="done">' + fa(g.d) + '</b></button>' +
+          '<button data-act="report" data-id="todo">⏳ فقط باقی مانده ها <b data-mcount="todo">' + fa(g.t - g.d) + '</b></button>' +
+          '<button data-act="report" data-id="full">📄 گزارش کامل <b data-mcount="full">' + fa(g.t) + '</b></button>' +
+          '<div class="menu-sep"></div>' +
+          '<button data-act="export-answers">💾 فقط فایل پاسخ ها (JSON)</button>' +
+        '</div>' +
+      '</span>' +
+      '<button class="btn notebook-btn ' + (state.ui.nbOpen ? 'on' : '') + '" data-act="notebook" title="باز کردن دفترچه یادداشت" aria-label="دفترچه">' + I('note') + '<span class="control-label">دفترچه</span></button>' +
+      '<button class="btn danger header-secondary" data-act="clean-all" title="پاکسازی پاسخ ها">' + I('trash') + ' پاکسازی</button>' +
+      '<button class="btn header-secondary" data-act="export" title="خروجی JSON">' + I('export') + ' خروجی JSON</button>' +
+      '<button class="btn header-secondary" data-act="import" title="ورودی JSON">' + I('import') + ' ورودی JSON</button>' +
+      '<button class="btn header-secondary" data-act="print" title="چاپ یا PDF">' + I('print') + ' چاپ/PDF</button>' +
+      '</div></div>';
+  }
+
+  /* کارت تاشوی سایدبار: همه کارت ها (نه فقط راهنمای توسعه دهنده) باز/بسته می شوند
+   * و وضعیت شان در state.ui.sideClosed ذخیره می ماند. */
+  function sideCard(key, icon, title, small, bodyHTML, extraClass) {
+    const closed = !!(state.ui.sideClosed && state.ui.sideClosed[key]);
+    return '<div class="card side-card side-card-' + esc(key) + ' ' + (extraClass || '') + (closed ? ' closed' : '') + '">' +
+      '<button type="button" class="card-h side-h" data-act="side-toggle" data-id="' + key + '" aria-expanded="' + (closed ? 'false' : 'true') + '" title="باز/بسته کردن این بخش">' +
+        '<span class="side-h-t">' + I(icon) + ' ' + title + '</span>' +
+        '<span class="side-h-r"><small>' + small + '</small><span class="side-chev">' + I('chev') + '</span></span>' +
+      '</button>' +
+      (closed ? '' : bodyHTML) +
+      '</div>';
+  }
+  function sideCardBody(inner, style) {
+    return '<div class="card-b"' + (style ? ' style="' + style + '"' : '') + '>' + inner + '</div>';
+  }
+
+  function sidebarLayoutButton(place) {
+    const mode = validSidebarLayout(state.ui.sidebarLayout);
+    const i = SIDEBAR_LAYOUTS.indexOf(mode);
+    const meta = {
+      'dual-right': { icon:'layout-right', label:'دو سایدبار', detail:'فهرست فازها راست، ابزارها چپ' },
+      'single-right': { icon:'layout-single', label:'یک سایدبار', detail:'همه بخش ها در سمت راست' },
+      'dual-left': { icon:'layout-left', label:'دو سایدبار برعکس', detail:'فهرست فازها چپ، ابزارها راست' }
+    }[mode];
+    const next = SIDEBAR_LAYOUTS[(i + 1) % SIDEBAR_LAYOUTS.length];
+    return '<button type="button" class="btn sidebar-layout-btn ' + esc(place || '') + '" data-act="sidebar-layout-cycle" data-mode="' + mode + '" ' +
+      'aria-label="چیدمان فعلی: ' + esc(meta.detail) + '. برای تغییر کلیک کن" title="چیدمان فعلی: ' + esc(meta.detail) + ' · کلیک برای رفتن به ' + esc(next === 'single-right' ? 'یک سایدبار' : (next === 'dual-left' ? 'دو سایدبار برعکس' : 'دو سایدبار')) + '">' +
+      I(meta.icon) + '<span class="control-label">' + meta.label + '</span><b class="layout-step">' + fa(i + 1) + '/۳</b></button>';
+  }
+  function fontScaleControls(scope, place) {
+    const isNb = scope === 'nb';
+    const v = isNb ? state.nbFontScale : state.ui.fontScale;
+    const pctValue = Math.round(clampScale(v, 1) * 100);
+    const targetAttr = isNb ? 'data-nb="font-scale"' : 'data-act="font-scale"';
+    return '<div class="font-controls ' + (place || '') + '" role="group" aria-label="تنظیم اندازه فونت ' + (isNb ? 'دفترچه' : 'رابط کاربری') + '" data-font-group="' + (isNb ? 'nb' : 'ui') + '">' +
+      '<button type="button" class="font-step" ' + targetAttr + ' data-scope="' + (isNb ? 'nb' : 'ui') + '" data-dir="-1" title="کوچک تر کردن فونت ' + (isNb ? 'دفترچه' : 'رابط کاربری') + '" aria-label="کاهش اندازه فونت">A−</button>' +
+      '<output class="font-scale-value" data-font-scale="' + (isNb ? 'nb' : 'ui') + '">' + fa(pctValue) + '٪</output>' +
+      '<button type="button" class="font-step" ' + targetAttr + ' data-scope="' + (isNb ? 'nb' : 'ui') + '" data-dir="1" title="بزرگ تر کردن فونت ' + (isNb ? 'دفترچه' : 'رابط کاربری') + '" aria-label="افزایش اندازه فونت">A+</button>' +
+      '<button type="button" class="font-reset" ' + targetAttr + ' data-scope="' + (isNb ? 'nb' : 'ui') + '" data-dir="0" title="بازنشانی اندازه فونت به ۱۰۰٪" aria-label="بازنشانی اندازه فونت">↺</button>' +
+      '</div>';
+  }
+  function refreshFontScales() {
+    document.documentElement.style.setProperty('--app-font-scale', String(clampScale(state.ui.fontScale, 1)));
+    document.documentElement.style.setProperty('--nb-font-scale', String(clampScale(state.nbFontScale, 1)));
+    $$('[data-font-scale="ui"]').forEach(e => e.textContent = fa(Math.round(clampScale(state.ui.fontScale, 1) * 100)) + '٪');
+    $$('[data-font-scale="nb"]').forEach(e => e.textContent = fa(Math.round(clampScale(state.nbFontScale, 1) * 100)) + '٪');
+  }
+  function adjustFontScale(scope, dir) {
+    const isNb = scope === 'nb';
+    const key = isNb ? 'nbFontScale' : null;
+    const current = isNb ? state.nbFontScale : state.ui.fontScale;
+    const next = Number(dir) === 0 ? 1 : clampScale(current + (Number(dir) < 0 ? -.05 : .05), 1);
+    if (isNb) state[key] = next; else state.ui.fontScale = next;
+    refreshFontScales(); saveNow();
+  }
+  function renderPhaseTree(navId, query) {
+    const q = norm(query || '');
+    const trees = state.plan.map(ph => {
+      const pText = norm([phaseNumLabel(ph), ph.title, ph.goal, ph.dod].join(' '));
+      const pHit = !q || pText.indexOf(q) !== -1;
+      const stepMatches = ph.steps.map((s, si) => {
+        const text = norm([stepNumLabel(ph, si), s.title, s.meta, s.tip, s.stack].join(' '));
+        const matchingSubs = s.subs.map((x, xi) => ({ x, xi })).filter(o => norm([subNumLabel(ph, si, o.xi), o.x.title].join(' ')).indexOf(q) !== -1);
+        return { s, si, hit: !q || pHit || text.indexOf(q) !== -1 || matchingSubs.length > 0, textHit: !q || pHit || text.indexOf(q) !== -1, matchingSubs };
+      }).filter(o => o.hit);
+      if (q && !pHit && !stepMatches.length) return '';
+      const openPh = !!(state.ui.sideOpen && state.ui.sideOpen[ph.id]);
+      const stepsHTML = openPh ? '<div class="tree-steps">' + stepMatches.map(o => {
+        const s = o.s, si = o.si, dn = stepDone(s);
+        const subOpen = !!(state.ui.sideStepOpen && state.ui.sideStepOpen[s.id]);
+        const subItems = s.subs.map((x, xi) => ({ x, xi })).filter(z => !q || pHit || o.textHit || o.matchingSubs.some(m => m.xi === z.xi));
+        const subsHTML = subOpen ? '<div class="tree-subs">' + subItems.map(z =>
+          '<div class="navsub' + (state.checks[z.x.id] ? ' done' : '') + (isArchived(z.x.id) ? ' is-archived' : '') + (needsReview(z.x.id) ? ' needs-review' : '') + '" data-act="goto-sub" data-id="' + esc(z.x.id) + '" data-ph="' + esc(ph.id) + '" data-nav-role="sub" title="' + esc(z.x.title) + '">' +
+            '<span class="nsub-num">' + subNumLabel(ph, si, z.xi) + '</span><span class="nsub-tt">' + hiStack(z.x.title) + '</span>' +
+            (needsReview(z.x.id) ? '<span class="mini-flag">' + I('flag') + '</span>' : '') + (isArchived(z.x.id) ? '<span class="mini-arch">' + I('archive') + '</span>' : '') +
+          '</div>'
+        ).join('') + (s.subs.length && !subItems.length ? '<div class="ns-empty">با این جستجو زیرمرحله ای پیدا نشد</div>' : (s.subs.length ? '' : '<div class="ns-empty">زیرمرحله ای ندارد</div>')) + '</div>' : '';
+        return '<div class="tree-step-wrap"><div class="navstep' + (dn ? ' done' : '') + (isArchived(s.id) ? ' is-archived' : '') + (needsReview(s.id) ? ' needs-review' : '') + '" data-act="goto-step" data-id="' + esc(s.id) + '" data-ph="' + esc(ph.id) + '" data-nav-role="step" title="' + esc(stripStepPrefix(s.title)) + '">' +
+          '<button type="button" class="tree-step-toggle' + (subOpen ? ' open' : '') + '" data-act="side-step-toggle" data-id="' + esc(s.id) + '" title="' + (subOpen ? 'بستن زیرمرحله ها' : 'نمایش زیرمرحله ها') + '" aria-expanded="' + (subOpen ? 'true' : 'false') + '">' + I('chev') + '</button>' +
+          '<span class="ns-num">' + stepNumLabel(ph, si) + '</span>' +
+          '<span class="ns-tt">' + hiStack(stripStepPrefix(s.title)) + '</span>' +
+          (dn ? '<span class="ns-ok">✓</span>' : '') + '</div>' + subsHTML + '</div>';
+      }).join('') + (ph.steps.length && !stepMatches.length ? '<div class="ns-empty">با این جستجو مرحله ای پیدا نشد</div>' : (ph.steps.length ? '' : '<div class="ns-empty">هنوز مرحله ای ندارد</div>')) + '</div>' : '';
+      return '<div class="tree-ph" data-phase-nav="' + esc(ph.id) + '">' +
+        '<div class="navitem" data-act="goto" data-id="' + esc(ph.id) + '" data-nav-role="phase">' +
+          '<button type="button" class="tree-toggle' + (openPh ? ' open' : '') + '" data-act="side-phase-toggle" data-id="' + esc(ph.id) + '" title="' + (openPh ? 'بستن مرحله های این فاز' : 'نمایش مرحله های این فاز') + '" aria-expanded="' + (openPh ? 'true' : 'false') + '">' + I('chev') + '</button>' +
+          '<span class="ic">' + iconOf(ph.icon) + '</span>' +
+          '<span class="tt"><b class="nav-num">' + phaseNumLabel(ph) + '</b> ' + esc(stripPhasePrefix(ph.title)) + '</span>' +
+          (needsReview(ph.id) ? '<span class="mini-flag" title="نیازمند بررسی">' + I('flag') + '</span>' : '') + (isArchived(ph.id) ? '<span class="mini-arch" title="آرشیو شده">' + I('archive') + '</span>' : '') +
+          '<span class="ct" data-nav="' + esc(ph.id) + '">' + fa(counts(ph).d) + '/' + fa(counts(ph).t) + '</span></div>' + stepsHTML + '</div>';
+    }).join('');
+    return trees || '<div class="nav-search-empty">موردی با این عبارت پیدا نشد.</div>';
+  }
+  function renderPhaseDrawer() {
+    const open = !!state.ui.phaseDrawerOpen;
+    return '<div class="phase-drawer-scrim ' + (open ? 'show' : '') + '" id="phaseDrawerScrim" data-act="phase-drawer-close" aria-hidden="' + (!open) + '"></div>' +
+      '<aside class="phase-drawer ' + (open ? 'open' : '') + '" id="phaseNavDrawer" role="dialog" aria-modal="true" aria-label="فهرست فازها" aria-hidden="' + (!open) + '">' +
+        '<header class="phase-drawer-head"><div><b>' + I('phases') + ' فهرست فازها</b><small>ناوبری کامل فاز، مرحله و زیرمرحله</small></div>' +
+          '<button type="button" class="iact" data-act="phase-drawer-close" title="بستن فهرست فازها (Esc)" aria-label="بستن">' + I('x') + '</button></header>' +
+        (state.ui.editing ? '<div class="phase-edit-warning">✎ حالت ویرایش فعال است؛ تغییر ساختار از دکمه های منوی هر مورد انجام می شود.</div>' : '') +
+        '<div class="phase-drawer-tools">' + sidebarLayoutButton('drawer') + fontScaleControls('ui','drawer') + '</div>' +
+        '<label class="phase-drawer-search"><span>' + I('search') + '</span><input id="phaseDrawerSearch" type="search" value="' + esc(state.ui.phaseDrawerQuery || '') + '" placeholder="جستجوی فاز، مرحله یا زیرمرحله…" aria-label="جستجو در فهرست فازها"></label>' +
+        '<div class="phase-drawer-list"><div class="navlist" id="phaseDrawerNavList" tabindex="0">' + renderPhaseTree('phaseDrawerNavList', state.ui.phaseDrawerQuery) + '</div></div>' +
+      '</aside>';
+  }
+  function expandDrawerSearch(q) {
+    const query = norm(q);
+    if (!query) return;
+    state.plan.forEach(ph => {
+      const pHit = norm([phaseNumLabel(ph), ph.title, ph.goal, ph.dod].join(' ')).includes(query);
+      const matching = [];
+      ph.steps.forEach((s, si) => {
+        const sHit = norm([stepNumLabel(ph, si), s.title, s.meta, s.tip, s.stack].join(' ')).includes(query);
+        const subHits = s.subs.some((x, xi) => norm([subNumLabel(ph, si, xi), x.title].join(' ')).includes(query));
+        if (sHit || subHits) matching.push({s,subHits});
+      });
+      if (pHit || matching.length) state.ui.sideOpen[ph.id] = true;
+      matching.forEach(o => { if (o.subHits) state.ui.sideStepOpen[o.s.id] = true; });
+    });
+  }
+
+  function renderSide() {
+    const g = counts();
+    const total = state.plan.reduce((a, ph) => a + ph.steps.length, 0);
+    const nbCount = (state.nbNotes || []).filter(n => String(n.body || '').trim() || String(n.title || '').trim()).length;
+
+    const overviewBody = sideCardBody(
+      '<div class="meta-row"><span>' + fa(g.d) + ' مورد از ' + fa(g.t) + ' انجام شده</span><span>' + fa(g.t - g.d) + ' باقی مانده</span></div>' +
+      '<div class="pbar"><i style="width:' + g.p + '%" data-pbar="global"></i></div>' +
+      '<div class="stats" style="margin-top:13px">' +
+      '<div class="stat ok"><b data-stat="done">' + fa(g.d) + '</b><span>انجام شده</span></div>' +
+      '<div class="stat warn"><b data-stat="todo">' + fa(g.t - g.d) + '</b><span>باقی مانده</span></div>' +
+      '<div class="stat"><b data-stat="phases">' + fa(state.plan.length) + '</b><span>فاز</span></div>' +
+      '<div class="stat"><b data-stat="notes">' + fa(g.notes) + '</b><span>یادداشت</span></div>' +
+      '</div>' +
+      '<div class="hint" style="margin-top:10px">مجموع مراحل: <b>' + fa(total) + '</b> · زیرمرحله ها: <b>' + fa(g.t - total) + '</b><br>نسخه نهایی برنامه: <b>V' + APP_VERSION + '</b></div>');
+
+    const phasesBody = sideCardBody(
+      '<div class="side-phase-tools">' + sidebarLayoutButton('sidebar') + fontScaleControls('ui','sidebar') + '</div>' +
+      (state.ui.editing ? '<div class="phase-edit-warning">✎ حالت ویرایش فعال است؛ برای درج مرحله یا فاز، محل درج را کنار دکمه وارد کن.</div>' : '') +
+      '<div class="navlist" id="sideNavList" tabindex="0">' + renderPhaseTree('sideNavList','') + '</div>', 'padding:8px');
+
+    const marksBody = sideCardBody(
+      '<div class="stack-chips" aria-label="فیلتر نشان ها در سایدبار">' +
+        '<button class="schip mk ' + (archivedFilterOn() ? 'on' : '') + '" data-act="mark-filter" data-id="archived">' + I('archive') + ' آرشیو شده ها <b data-mkcount="archived">' + fa(markCount('archived')) + '</b></button>' +
+        '<button class="schip mk ' + ((state.ui.markFilters || []).indexOf('review') !== -1 ? 'on' : '') + '" data-act="mark-filter" data-id="review">' + I('flag') + ' نیازمند بررسی <b data-mkcount="review">' + fa(markCount('review')) + '</b></button>' +
+        (markFiltersOn() ? '<button class="schip mk" data-act="mark-clear">پاک کردن فیلتر</button>' : '') +
+      '</div>' +
+      '<div class="hint" style="margin-top:9px">چند انتخاب ممکن است: هر دو نشان را با هم فعال کن تا هر دو نوع با هم دیده شوند. آرشیو شده ها بدون این فیلتر در صفحه اصلی دیده نمی شوند.</div>');
+
+    const stackBody = sideCardBody(
+      '<div class="stack-chips" aria-label="فیلتر استک ها">' +
+      '<button class="schip ' + (!state.ui.stack ? 'on' : '') + '" data-act="stack-filter" data-id="">همه مراحل</button>' +
+      STACK.map(st => {
+        const n = stackCount(st);
+        if (!n) return '';
+        return '<button class="schip ' + (state.ui.stack === st ? 'on' : '') + '" data-act="stack-filter" data-id="' + esc(st) + '" title="' + fa(n) + ' مرحله مرتبط">' + esc(st) + ' <b>' + fa(n) + '</b></button>';
+      }).join('') +
+      '</div>' +
+      (state.ui.stack ? '<div class="stack-active-note">استک فیلترشده: <mark class="hl-stack">' + esc(state.ui.stack) + '</mark> — همین کلمه در عنوان، نکته و زیرمرحله های نمایش داده شده هم هایلایت شده است.</div>' : '') +
+      '<div class="hint" style="margin-top:9px">با کلیک روی هر ابزار، مراحل مرتبط با آن فیلتر و کلمه استک در متن ها برجسته می شود (مثلاً فقط مراحل Dokan Pro).</div>',
+      'padding:10px 12px 12px');
+
+    const dataBody = sideCardBody(
+      '<div class="toolbtns">' +
+      '<button class="btn" data-act="export">' + I('export') + ' خروجی JSON کامل</button>' +
+      '<button class="btn" data-act="export-answers">💾 فقط فایل پاسخ ها</button>' +
+      '<button class="btn" data-act="import">' + I('import') + ' ورودی JSON</button>' +
+      '<button class="btn" data-act="copy-json">' + I('copy') + ' کپی JSON</button>' +
+      '</div>' +
+      '<div class="toolbtns" style="margin-top:8px">' +
+      '<button class="btn danger" data-act="clean-all">' + I('trash') + ' پاکسازی همه پاسخ ها</button>' +
+      '<button class="btn danger" data-act="reset-content">' + I('reset') + ' بازنشانی محتوای پیش فرض</button>' +
+      '</div>' +
+      '<div class="hint" style="margin-top:9px">«پاکسازی» تیک ها، یادداشت ها و دفترچه را خالی می کند (و فایل کناری را هم خالی می کند).</div>');
+
+    const storeBody = sideCardBody(
+      '<div class="store-row">' +
+        '<span class="dot ' + (fileStore.connected ? 'ok' : (fileStore.status === 'error' ? 'err' : 'off')) + '"></span>' +
+        '<span data-store-label>' +
+          (fileStore.connected
+            ? 'فایل کناری متصل است: <b>' + esc(SIDECAR) + '</b>'
+            : (fileStore.status === 'need-permission' ? 'فایل قبلی پیدا شد؛ برای فعال سازی دسترسی دکمه را بزن.' : 'ذخیره سازی فعلی: ' + (store.available ? 'حافظه مرورگر (localStorage)' : 'حافظه موقت'))) +
+        '</span>' +
+      '</div>' +
+      '<div class="store-state" data-store-state>' + (fileStore.connected ? ('ذخیره شد · ' + esc(fileStore.lastSaved || '-')) : 'آماده') + '</div>' +
+      '<div class="toolbtns" style="margin-top:8px">' +
+      (fileStore.status === 'need-permission'
+        ? '<button class="btn pri" data-act="file-regrant">🔓 فعال سازی دسترسی فایل</button>'
+        : '<button class="btn" data-act="file-connect">🔗 اتصال فایل پاسخ ها</button>') +
+      (fileStore.connected ? '<button class="btn" data-act="file-write">💾 ذخیره فوری در فایل</button><button class="btn" data-act="file-disconnect">✂ قطع اتصال</button>' : '') +
+      '</div>' +
+      '<div class="hint" style="margin-top:9px">' +
+      (store.available ? I('check') + ' پیشرفت در همین مرورگر ذخیره می شود.' : I('warn') + ' در این نمایش (iframe سندباکس) ذخیره سازی مرورگر غیرفعال است؛ فایل را دانلود و باز کن.') +
+      '<br>اتصال فایل: یک بار <code>' + esc(SIDECAR) + '</code> را کنار همین HTML بساز و انتخاب کن؛ از آن پس همه پاسخ ها خودکار در همان فایل ذخیره می شود.' +
+      '</div>');
+
+    const notebookBody = sideCardBody(
+      '<div class="hint" style="margin:0 0 9px">دفترچه چندیادداشتی مستقل (مثل Obsidian): ' + fa(nbCount) + ' یادداشت ذخیره شده است. آخرین یادداشت بازشده حفظ می شود.</div>' +
+      '<div class="toolbtns">' +
+      '<button class="btn pri" data-act="notebook">' + I('note') + ' باز کردن دفترچه</button>' +
+      '<button class="btn" data-act="notebook-copy">' + I('copy') + ' کپی</button>' +
+      '<button class="btn" data-act="notebook-share">🔗 اشتراک گذاری</button>' +
+      '</div>');
+
+    const quickBody = sideCardBody(
+      '<div class="hint">' +
+      '<kbd>/</kbd> جست وجو · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>.</kbd> خروجی JSON · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>;</kbd> یادداشت جدید<br>' +
+      'هر مرحله را کلیک/تیک بزن؛ روی «یادداشت» بزن تا یادداشت بنویسی.<br>' +
+      'در حالت ویرایش، متن ها را کلیک کن و مستقیم تغییر بده؛ برای درج در شماره دلخواه، فیلد «محل درج» کنار دکمه افزودن را پر کن.' +
+      '</div>');
+
+    const devBody = sideCardBody(
+      '<div class="hint">' +
+      'کل محتوای مراحل در بلوک <code>PLAN_PARTS</code> همین فایل است. هر فایل <code>PLAN_*.js</code> یک یا چند فاز را اضافه می کند.' +
+      '<br>ساختار یک مرحله: <code>{ id, title, meta, tip, stack, subs: [ … ] }</code>' +
+      '<br><code>meta</code>: «≈ زمان · مسئول» — <code>tip</code>: نکته تجربی — <code>stack</code>: نام ابزار برای فیلتر (مثلاً Dokan Pro)' +
+      '<br>هویت برند و فهرست استک در بلوک <code>PLAN_META</code> تعریف شده است.' +
+      '<br>آیکون فاز: یکی از نام ها → <code>compass, server, cart, palette, building, package, flask, zap, megaphone, rocket, paperclip</code>' +
+      '<br>شماره فاز/مرحله/زیرمرحله محاسباتی است و با افزودن/حذف/جابه جایی خودکار اصلاح می شود؛ برای درج، فیلد «محل درج» را پر کن و برای افزودن عادی خالی بگذار.' +
+      '<br>خروجی JSON معادل فایل ذخیره شده است؛ با «ورودی JSON» می توانی همان نقشه راه را روی نسخه دیگر بازیابی کنی.' +
+      '</div>');
+
+    const overviewCard = sideCard('overview', 'chart', 'نمای کلی پروژه', fa(g.p) + '٪', overviewBody);
+    const phaseCard = sideCard('phases', 'phases', 'فهرست فازها', 'اسکرول مستقل', phasesBody, 'phases-card');
+    const otherCards =
+      sideCard('marks', 'flag', 'آرشیو و نیازمند بررسی', fa(markCount('archived') + markCount('review')) + ' نشان', marksBody) +
+      sideCard('stack', 'tools', 'فیلتر استک پروژه', fa(STACK.length) + ' ابزار', stackBody) +
+      sideCard('data', 'tools', 'داده و ابزار', '', dataBody) +
+      sideCard('store', 'export', 'محل ذخیره پاسخ ها', esc(SIDECAR), storeBody) +
+      sideCard('notebook', 'note', 'دفترچه یادداشت', 'مستقل از مراحل', notebookBody) +
+      sideCard('quick', 'keyboard', 'راهنمای سریع', '', quickBody) +
+      sideCard('dev', 'tools', 'راهنمای توسعه دهنده', 'برای ویرایش فایل', devBody);
+    const mode = validSidebarLayout(state.ui.sidebarLayout);
+    if (mode === 'single-right') {
+      return '<aside class="side side-right side-single" aria-label="سایدبار سمت راست">' + overviewCard + phaseCard + otherCards + '</aside>';
+    }
+    if (mode === 'dual-left') {
+      return '<aside class="side side-left side-phases" aria-label="فهرست فازها">' + phaseCard + '</aside>' +
+        '<aside class="side side-right side-tools" aria-label="ابزارها و وضعیت پروژه">' + overviewCard + otherCards + '</aside>';
+    }
+    return '<aside class="side side-left side-tools" aria-label="ابزارها و وضعیت پروژه">' + overviewCard + otherCards + '</aside>' +
+      '<aside class="side side-right side-phases" aria-label="فهرست فازها">' + phaseCard + '</aside>';
+  }
+
+  function renderPhases() {
+    const list = state.plan.map((ph, i) => {
+      // فاز بدون مرحله فقط وقتی بی نشان نیست نمایش داده می شود؛ آرشیو نباید در نمای اصلی بماند.
+      if (!state.ui.editing && isArchived(ph.id) && !archivedFilterOn()) return '';
+      if (!state.ui.editing && markFiltersOn() && ph.steps.length === 0 && !entityHasFilterMark(ph, null, null)) return '';
+      const anyVisible = ph.steps.length === 0 ? true : ph.steps.some(s => matchesAll(ph, s));
+      if (!anyVisible && !state.ui.editing) return '';
+      return phaseHTML(ph, i);
+    }).join('');
+    return '<main class="phases" id="phases">' + (list || '<div class="card"><div class="empty">موردی با این فیلتر/جست وجو پیدا نشد.</div></div>') + '</main>';
+  }
+
+  function renderBanner() {
+    return '<div class="banner ' + (state.ui.stale ? 'show' : '') + '" id="banner">' +
+      '<span>' + I('info') + ' محتوای پیش فرض این فایل به روزرسانی شده است. می توانی محتوای جدید را بارگذاری کنی (تیک ها و یادداشت ها حفظ می شوند).</span>' +
+      '<button class="btn pri" data-act="apply-stale">بارگذاری محتوای جدید</button>' +
+      '<button class="btn" data-act="dismiss-stale">بعداً</button></div>';
+  }
+
+  let phaseDrawerScrollY = 0;
+  function togglePhaseDrawer(force) {
+    const wasOpen = !!state.ui.phaseDrawerOpen;
+    const open = typeof force === 'boolean' ? force : !wasOpen;
+    if (open && !wasOpen) phaseDrawerScrollY = window.scrollY;
+    const restoreY = open ? phaseDrawerScrollY : (wasOpen ? phaseDrawerScrollY : window.scrollY);
+    state.ui.phaseDrawerOpen = open;
+    document.body.classList.toggle('phase-nav-open', open);
+    save(); render();
+    // Locking body scroll for the scrim can alter the browser's stored scroll position; restore it exactly.
+    if (document.scrollingElement) document.scrollingElement.scrollTop = restoreY;
+    updateHeaderCompact();
+    if (open) requestAnimationFrame(() => { const q = $('#phaseDrawerSearch'); if (q) { try { q.focus({ preventScroll:true }); } catch (_) { q.focus(); } } });
+  }
+  function updateHeaderCompact() {
+    const compact = window.scrollY > 48;
+    const header = $('.topbar');
+    if (header) header.classList.toggle('compact', compact);
+    document.body.classList.toggle('header-compact', compact);
+  }
+  function render() {
+    const y = window.scrollY;
+    const sideScroll = {};
+    $$('.side').forEach(el => {
+      const k = el.classList.contains('side-phases') ? 'phases' : (el.classList.contains('side-tools') ? 'tools' : 'single');
+      sideScroll[k] = el.scrollTop;
+    });
+    const navScroll = {};
+    $$('.navlist').forEach(el => { navScroll[el.id || ('nav-' + Object.keys(navScroll).length)] = el.scrollTop; });
+    const mode = validSidebarLayout(state.ui.sidebarLayout);
+    $('#app').innerHTML = '<div class="wrap">' + renderBanner() + renderTop() +
+      '<div class="layout" data-sidebar-layout="' + mode + '">' + renderSide() + renderPhases() + '</div>' +
+      '<div class="foot">' +
+      '<div class="legend">' +
+      '<span><i style="background:#34d399"></i> انجام شده</span>' +
+      '<span><i style="background:#2dd4bf"></i> پیشرفت</span>' +
+      '<span><i style="background:#f59e0b"></i> نکته تجربی</span>' +
+      '<span><i style="background:#6366f1"></i> B2B</span>' +
+      '</div>' +
+      'نسخه نهایی برنامه: V' + APP_VERSION + ' · ' +
+      'این فایل یک چک لیست اجرایی زنده است: تیک بزن، یادداشت بنویس، ساختار را ویرایش کن و خروجی JSON بگیر. ' +
+      'همه داده ها فقط در مرورگر خودت ذخیره می شود (بدون سرور، بدون وابستگی).' +
+      '</div></div>' + renderPhaseDrawer();
+    document.body.classList.toggle('editing', !!state.ui.editing);
+    document.body.classList.toggle('phase-nav-open', !!state.ui.phaseDrawerOpen);
+    $$('.phase').forEach(sect => {
+      const ph = findPhase(sect.dataset.phase), box = sect.querySelector('.ph-ck input[data-ck]');
+      if (!ph || !box) return;
+      const c = counts(ph);
+      box.checked = c.t > 0 && c.d === c.t;
+      box.indeterminate = c.d > 0 && c.d < c.t;
+    });
+    $$('.side').forEach(el => {
+      const k = el.classList.contains('side-phases') ? 'phases' : (el.classList.contains('side-tools') ? 'tools' : 'single');
+      if (sideScroll[k] != null) el.scrollTop = sideScroll[k];
+    });
+    $$('.navlist').forEach(el => { if (navScroll[el.id] != null) el.scrollTop = navScroll[el.id]; });
+    // Preserve the exact page position without triggering a smooth-scroll animation.
+    document.scrollingElement.scrollTop = y;
+    refreshFontScales();
+    updateHeaderCompact();
+    const phaseFab = $('#phaseFab');
+    if (phaseFab) phaseFab.setAttribute('aria-expanded', state.ui.phaseDrawerOpen ? 'true' : 'false');
+    spy();
+  }
+
+  function updateStats() {
+    const g = counts();
+    const C = 150.8;
+    const ring = $('[data-ring]');
+    if (ring) ring.setAttribute('stroke-dashoffset', (C * (1 - g.p / 100)).toFixed(1));
+    $$('[data-stat="ringpct"]').forEach(e => e.textContent = fa(g.p) + '٪');
+    $$('[data-stat="pctside"]').forEach(e => e.textContent = fa(g.p) + '٪');
+    $$('[data-stat="done"]').forEach(e => e.textContent = fa(g.d));
+    $$('[data-stat="todo"]').forEach(e => e.textContent = fa(g.t - g.d));
+    $$('[data-stat="notes"]').forEach(e => e.textContent = fa(g.notes));
+    $$('[data-stat="phases"]').forEach(e => e.textContent = fa(state.plan.length));
+    $$('[data-pbar="global"]').forEach(e => e.style.width = g.p + '%');
+    state.plan.forEach(ph => {
+      const c = counts(ph);
+      $$('[data-pbar="' + ph.id + '"]').forEach(e => e.style.width = c.p + '%');
+      $$('[data-ppct="' + ph.id + '"]').forEach(e => e.innerHTML = fa(c.p) + '٪ <small>پیشرفت</small>');
+      $$('[data-nav="' + ph.id + '"]').forEach(e => e.textContent = fa(c.d) + '/' + fa(c.t));
+    });
+    const m = $('.meta-row');
+    if (m) m.innerHTML = '<span>' + fa(g.d) + ' مورد از ' + fa(g.t) + ' انجام شده</span><span>' + fa(g.t - g.d) + ' باقی مانده</span>';
+    $$('[data-mkcount]').forEach(e => { e.textContent = fa(markCount(e.dataset.mkcount)); });
+    // شمارنده های منوی گزارش MD
+    $$('[data-mcount]').forEach(e => {
+      const k = e.dataset.mcount;
+      e.textContent = fa(k === 'done' ? g.d : (k === 'todo' ? (g.t - g.d) : g.t));
+    });
+  }
+
+  /* ---------- عملیات ساختاری ------------------------------------------- */
+  function findPhase(id) { return state.plan.filter(p => p.id === id)[0]; }
+  function findStepOfSub(subId) {
+    for (const ph of state.plan) for (const s of ph.steps) if (s.subs.some(x => x.id === subId)) return { ph, s };
+    return null;
+  }
+  function findStep(id) {
+    for (const ph of state.plan) { const s = ph.steps.filter(x => x.id === id)[0]; if (s) return { ph, s }; }
+    return null;
+  }
+  function touch() { state.ui.stale = false; save(); }
+
+  /* درج در جایگاه دلخواه؛ مقدار خالی رفتار پیش فرض را حفظ می کند. */
+  function parseInsertPosition(raw, label, count) {
+    if (raw == null || !String(raw).trim()) return { ok:true, index:null };
+    const m = norm(raw).match(/^([0-9]+)$/);
+    if (!m) { toast('در «محل درج ' + label + '» فقط عدد وارد کن.'); return {ok:false,index:null}; }
+    const n = Number(m[1]);
+    if (!Number.isInteger(n) || n < 1 || n > count + 1) {
+      toast('محل درج ' + label + ' باید بین ۱ تا ' + fa(count + 1) + ' باشد.');
+      return {ok:false,index:null};
+    }
+    return {ok:true,index:n - 1};
+  }
+  function addStep(phId, afterStepId, position) {
+    const ph = findPhase(phId); if (!ph) return;
+    const pos = parseInsertPosition(position, 'مرحله', ph.steps.length);
+    if (!pos.ok) return;
+    const s = { id: uid('st'), title: 'مرحله جدید — عنوان را در حالت ویرایش تغییر بده', meta: '≈ ؟ · مسئول', tip: '', subs: [] };
+    if (pos.index != null) ph.steps.splice(pos.index, 0, s);
+    else if (afterStepId && typeof afterStepId === 'string') {
+      const i = ph.steps.map(x => x.id).indexOf(afterStepId);
+      ph.steps.splice(i + 1, 0, s);
+    } else ph.steps.push(s);
+    state.open[phId] = true; touch(); render();
+    flash(s.id);
+    toast('مرحله جدید در جایگاه ' + fa(ph.steps.indexOf(s) + 1) + ' درج شد؛ شماره بقیه مراحل خودکار به روز شد.');
+  }
+  function addSub(stepId, after, position) {
+    const f = findStep(stepId); if (!f) return;
+    const list = f.s.subs;
+    const pos = parseInsertPosition(position, 'زیرمرحله', list.length);
+    if (!pos.ok) return;
+    const item = { id: uid('sb'), title: 'زیرمرحله جدید — متن را ویرایش کن' };
+    if (pos.index != null) list.splice(pos.index, 0, item);
+    else {
+      const i = Number(after);
+      if (i >= 0 && i < list.length) list.splice(i + 1, 0, item); else list.push(item);
+    }
+    touch(); render(); flash(item.id);
+    toast('زیرمرحله جدید در جایگاه ' + fa(list.indexOf(item) + 1) + ' درج شد؛ شماره بقیه خودکار به روز شد.');
+  }
+  function addPhase(afterId, position) {
+    const pos = parseInsertPosition(position, 'فاز', state.plan.length);
+    if (!pos.ok) return;
+    const ph = { id: uid('ph'), icon: '🧩', title: 'فاز جدید — عنوان را ویرایش کن', goal: 'هدف این فاز را بنویس.', dod: 'شرط اتمام این فاز را بنویس.', steps: [] };
+    if (pos.index != null) state.plan.splice(pos.index, 0, ph);
+    else {
+      const i = state.plan.map(p => p.id).indexOf(afterId);
+      state.plan.splice(i >= 0 ? i + 1 : state.plan.length, 0, ph);
+    }
+    touch(); render(); flash(ph.id);
+    toast('فاز جدید در جایگاه ' + fa(state.plan.indexOf(ph) + 1) + ' درج شد؛ شماره همه فازها خودکار به روز شد.');
+  }
+  function delPhase(id) {
+    const ph = findPhase(id); if (!ph) return;
+    if (!confirm('فاز «' + ph.title + '» با همه مراحلش حذف شود؟')) return;
+    state.plan = state.plan.filter(p => p.id !== id); touch(); render(); toast('فاز حذف شد');
+  }
+  function delStep(id) {
+    const f = findStep(id); if (!f) return;
+    if (!confirm('این مرحله حذف شود؟')) return;
+    f.ph.steps = f.ph.steps.filter(s => s.id !== id); touch(); render(); toast('مرحله حذف شد');
+  }
+  function delSub(stepId, i) {
+    const f = findStep(stepId); if (!f) return;
+    f.s.subs.splice(Number(i), 1); touch(); render(); toast('زیرمرحله حذف شد');
+  }
+  function moveStep(id, dir) {
+    const f = findStep(id); if (!f) return;
+    const arr = f.ph.steps, i = arr.map(s => s.id).indexOf(id), j = i + Number(dir);
+    if (j < 0 || j >= arr.length) return;
+    arr.splice(j, 0, arr.splice(i, 1)[0]); touch(); render(); flash(id);
+  }
+  function moveSub(stepId, i, dir) {
+    const f = findStep(stepId); if (!f) return;
+    const arr = f.s.subs, a = Number(i), b = a + Number(dir);
+    if (b < 0 || b >= arr.length) return;
+    arr.splice(b, 0, arr.splice(a, 1)[0]); touch(); render(); flash(arr[b].id);
+  }
+  function movePhaseTo(id, dir) {
+    const i = state.plan.map(p => p.id).indexOf(id), j = i + Number(dir);
+    if (j < 0 || j >= state.plan.length) return;
+    state.plan.splice(j, 0, state.plan.splice(i, 1)[0]); touch(); render(); flash(id);
+  }
+  function flash(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add('hit');
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => el.classList.remove('hit'), 1500);
+  }
+
+  /* ---------- پاکسازی همه پاسخ ها --------------------------------------- */
+  function cleanAll() {
+    const g = counts();
+    const nbLen = nbAllText().length;
+    const msg = 'همه پاسخ های فعلی پاک شوند؟\n\n' +
+      '• ' + fa(g.d) + ' تیک ثبت شده\n' +
+      '• ' + fa(g.notes) + ' یادداشت مرحله/زیرمرحله\n' +
+      '• دفترچه یادداشت (' + fa((state.nbNotes || []).length) + ' یادداشت، ' + fa(nbLen) + ' کاراکتر)\n' +
+      (fileStore.connected ? '• محتوای فایل ' + SIDECAR + ' هم خالی می شود\n' : '') +
+      '\nساختار و متن مراحل دست نخورده می ماند. این کار قابل بازگشت نیست.';
+    if (!confirm(msg)) return;
+    state.checks = {};
+    state.notes = {};
+    state.marks = { archived: {}, review: {} };
+    state.ui.markFilters = [];
+    state.openNotes = {};
+    state.notebook = '';
+    state.nbNotes = [];
+    state.nbActiveId = '';
+    state.nbSecondaryId = '';
+    state.nbSplit = false;
+    state.nbMode = 'edit';
+    state.nbSecondaryMode = 'read';
+    state.nbView = 'list';
+    saveNow();
+    const done = () => { render(); nbRender(); if (fileStore.connected) fileStore.write(); toast('همه پاسخ ها پاک شد' + (fileStore.connected ? ' و فایل ' + SIDECAR + ' خالی شد.' : '.')); };
+    setTimeout(done, 30);
+  }
+
+  function closeMenus() {
+    $$('.menu-wrap.open').forEach(w => w.classList.remove('open'));
+  }
+
+  /* ---------- خروجی ها -------------------------------------------------- */
+  const BOM = '\uFEFF';   // برای نمایش درست فارسی در Notepad ویندوز
+  function download(name, text, type) {
+    try {
+      const isText = /json|markdown|text/i.test(type || 'application/json');
+      const body = (isText && /markdown|text\/plain/i.test(type || '')) ? (BOM + text) : text;
+      const b = new Blob([body], { type: (type || 'application/json') + ';charset=utf-8' });
+      const url = URL.createObjectURL(b);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.rel = 'noopener';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
+      toast('دانلود شروع شد: ' + name + ' (اگر مسدود شد، از پنجره «متن گزارش» کپی کن)');
+      return true;
+    } catch (e) {
+      toast('مرورگر اجازه دانلود نداد — متن در پنجره «متن گزارش» آماده است.');
+      return false;
+    }
+  }
+  /* باز کردن متن در تب جدید (اگر مرورگر اجازه دهد) — جایگزین «باز نشدن فایل» */
+  function openInTab(text, type) {
+    try {
+      const b = new Blob([BOM + text], { type: (type || 'text/plain') + ';charset=utf-8' });
+      const url = URL.createObjectURL(b);
+      const w = window.open(url, '_blank');
+      if (!w) { toast('باز کردن تب جدید مسدود شد (پیش نمایش داخلی). از «کپی متن» استفاده کن.'); return false; }
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      return true;
+    } catch (e) { toast('باز کردن تب جدید ممکن نشد — از «کپی متن» استفاده کن.'); return false; }
+  }
+
+  /* ---------- مودال نمایش متن (گزارش/دفترچه) — راه حل جایگزین دانلود ---------- */
+  function closeModal() {
+    const m = $('#textModal');
+    if (m) { m.classList.remove('show'); document.body.classList.remove('modal-open'); }
+  }
+  function showTextModal(opts) {
+    let m = $('#textModal');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'textModal';
+      m.className = 'modal';
+      document.body.appendChild(m);
+      m.addEventListener('click', (e) => {
+        if (e.target === m || e.target.closest('[data-modal="close"]')) closeModal();
+        else {
+          const b = e.target.closest('[data-modal]'); if (!b) return;
+          const act = b.dataset.modal;
+          const text = m._text || '', fname = m._name || 'report.md';
+          if (act === 'copy') fallbackCopy(text, () => toast('متن کپی شد ✅'));
+          else if (act === 'redownload') download(fname, text, 'text/markdown');
+          else if (act === 'open') openInTab(text, 'text/markdown');
+        }
+      });
+    }
+    m._text = opts.text; m._name = opts.filename || 'report.md';
+    m.innerHTML =
+      '<div class="modal-panel">' +
+        '<div class="modal-head">' +
+          '<b>' + esc(opts.title || 'متن خروجی') + '</b>' +
+          '<span class="modal-hint">' + (opts.mode === 'notebook' ? 'دفترچه یادداشت' : 'گزارش') + ' · ' + esc(opts.filename || '') + '</span>' +
+          '<button class="iact" data-modal="close" title="بستن (Esc)">' + I('x') + '</button>' +
+        '</div>' +
+        '<textarea class="modal-text" readonly spellcheck="false">' + esc(opts.text || '') + '</textarea>' +
+        '<div class="modal-foot">' +
+          '<button class="btn" data-modal="copy">' + I('copy') + ' کپی متن</button>' +
+          '<button class="btn pri" data-modal="redownload">' + I('export') + ' دانلود مجدد</button>' +
+          '<button class="btn" data-modal="open">↗ باز کردن در تب جدید</button>' +
+          '<button class="btn" data-modal="close">بستن</button>' +
+          '<span class="modal-note">اگر دانلود مرورگر مسدود/ناخوانا بود، از «کپی متن» یا «باز کردن در تب جدید» استفاده کن.</span>' +
+        '</div>' +
+      '</div>';
+    m.classList.add('show');
+    document.body.classList.add('modal-open');
+  }
+  function stamp() {
+    const d = new Date();
+    const p = (n) => (n < 10 ? '0' + n : '' + n);
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+  }
+  function exportJSON() {
+    saveNow();
+    const out = {
+      app: APP_ID, kind: 'full-state', version: 2, appVersion: APP_VERSION,
+      exportedAt: new Date().toISOString(),
+      state: state
+    };
+    download('answers-roadmap-export-' + stamp() + '.json', JSON.stringify(out, null, 2), 'application/json');
+  }
+  /* فقط پاسخ ها (همان فرمت فایل کناری) — برای فایل سبک و قابل ویرایش دستی */
+  function exportAnswers() {
+    saveNow();
+    const out = fileStore.answerPayload();
+    download('answers-roadmap-' + stamp() + '.json', JSON.stringify(out, null, 2), 'application/json');
+  }
+  function writeSidecarNow() {
+    if (!fileStore.connected) { toast('فایلی متصل نیست — اول «اتصال فایل پاسخ ها» را بزن.'); return; }
+    fileStore.write().then(ok => { if (ok) toast('پاسخ ها در ' + SIDECAR + ' ذخیره شد ✅'); });
+  }
+  /* ---------- گزارش MD سه حالته: انجام شده / باقی مانده / کامل ---------- */
+  const REPORT_MODES = {
+    done: { label: 'فقط کارهای انجام شده', short: 'انجام شده' },
+    todo: { label: 'فقط کارهای باقی مانده', short: 'باقی مانده' },
+    full: { label: 'گزارش کامل (همه موارد)', short: 'کامل' }
+  };
+  function buildReport(mode) {
+    mode = REPORT_MODES[mode] ? mode : 'full';
+    const g = counts();
+    const faDate = new Date().toLocaleString('fa-IR');
+    let md = '# ' + state.meta.title + '\n\n';
+    md += '- نوع گزارش: **' + REPORT_MODES[mode].label + '**\n';
+    md += '- تاریخ گزارش: ' + faDate + '\n';
+    md += '- پیشرفت کل: **' + fa(g.p) + '٪** (' + fa(g.d) + ' از ' + fa(g.t) + ' مورد)\n';
+    md += '- باکس یادداشت ها: ' + fa(g.notes) + ' مورد\n';
+    if (fileStore.connected) md += '- منبع ذخیره: ' + SIDECAR + '\n';
+    md += '\n---\n';
+    let any = false;
+    state.plan.forEach(ph => {
+      const c = counts(ph);
+      const buf = [];
+      ph.steps.forEach(s => {
+        const isDone = stepDone(s);
+        const doneSubs = s.subs.filter(x => !!state.checks[x.id]);
+        const todoSubs = s.subs.filter(x => !state.checks[x.id]);
+        let subsToShow = [], stepTag = '';
+        if (mode === 'done') {
+          if (!isDone && !doneSubs.length) return;
+          subsToShow = doneSubs;
+          stepTag = isDone ? '[x]' : '[~]';
+        } else if (mode === 'todo') {
+          if (isDone) return;
+          subsToShow = todoSubs;
+          stepTag = '[ ]';
+        } else {
+          subsToShow = s.subs;
+          stepTag = isDone ? '[x]' : (doneSubs.length ? '[~]' : '[ ]');
+        }
+        buf.push('\n### ' + stepTag + ' ' + s.title + (s.meta ? '  (' + s.meta + ')' : '') + (s.stack ? '  \u00ab' + s.stack + '\u00bb' : ''));
+        subsToShow.forEach(x => {
+          const mark = state.checks[x.id] ? '[x]' : '[ ]';
+          buf.push('- ' + mark + ' ' + x.title);
+          const sn = state.notes['n:' + x.id];
+          if (sn && mode !== 'todo') buf.push('    - 🗒 یادداشت: ' + String(sn).replace(/\n/g, ' '));
+        });
+        const stn = state.notes['n:' + s.id];
+        if (stn) buf.push('\n> 📝 **یادداشت مرحله:** ' + String(stn).replace(/\n/g, '\n> '));
+      });
+      if (buf.length) {
+        any = true;
+        md += '\n## ' + phaseNumLabel(ph) + ' — ' + stripPhasePrefix(ph.title) + '  —  ' + fa(c.p) + '٪' + '\n';
+        if (mode === 'full' && ph.goal) md += '> ' + ph.goal + '\n';
+        if (mode === 'full' && ph.dod) md += '\n**شرط اتمام فاز:** ' + ph.dod + '\n';
+        md += buf.join('\n') + '\n';
+      }
+    });
+    if (!any) md += '\n_(موردی برای این حالت گزارش وجود ندارد.)_\n';
+    const nbList = nbSorted((state.nbNotes || []).filter(n => String(n.body || '').trim() || String(n.title || '').trim()));
+    if (nbList.length) {
+      md += '\n---\n\n## 📝 دفترچه یادداشت (مستقل) — ' + fa(nbList.length) + ' یادداشت\n';
+      nbList.forEach((n, i) => {
+        md += '\n### ' + fa(i + 1) + '. ' + (String(n.title || '').trim() || nbTitleFromBody(n.body)) + '\n\n' + String(n.body || '').trim() + '\n';
+      });
+    } else if ((state.notebook || '').trim()) {
+      md += '\n---\n\n## 📝 دفترچه یادداشت (مستقل)\n\n' + state.notebook.trim() + '\n';
+    }
+    md += '\n---\n\n_ساخته شده با نقشه راه ' + BRAND + ' — ' + faDate + '_\n';
+    return md;
+  }
+  function reportModeCounts() {
+    const g = counts();
+    return { done: g.d, todo: g.t - g.d, full: g.t };
+  }
+  function reportMD(mode) {
+    mode = REPORT_MODES[mode] ? mode : (state.ui.reportMode || 'full');
+    state.ui.reportMode = mode; save();
+    const md = buildReport(mode);
+    const fname = 'packpolymer-report-' + mode + '-' + stamp() + '.md';
+    download(fname, md, 'text/markdown');
+    showTextModal({ title: 'گزارش ' + REPORT_MODES[mode].short, text: md, filename: fname, mode: 'report' });
+    closeMenus();
+  }
+  function copyJSON() {
+    saveNow();
+    const t = JSON.stringify(fileStore.answerPayload(), null, 2);
+    const done = () => toast('JSON در کلیپ بورد کپی شد');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(done, () => fallbackCopy(t, done));
+    } else fallbackCopy(t, done);
+  }
+  function fallbackCopy(t, cb) {
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); cb(); } catch (e) { toast('کپی نشد؛ از «خروجی JSON» استفاده کن.'); }
+    ta.remove();
+  }
+  function importJSON() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0]; if (!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        try {
+          const raw = String(r.result).replace(/^\uFEFF/, '');
+          const d = JSON.parse(raw);
+          const st = (d && d.state) ? d.state : d;
+          if (!st || typeof st !== 'object') throw new Error('ساختار نامعتبر');
+          const isFull = Array.isArray(st.plan) && st.plan.length > 0;
+          const msg = isFull
+            ? 'وضعیت کامل (ساختار مراحل + پاسخ ها) با فایل ورودی جایگزین شود؟'
+            : 'پاسخ های فایل ورودی (تیک ها، یادداشت ها، دفترچه) روی نقشه راه فعلی اعمال شود؟';
+          if (!confirm(msg)) return;
+          if (isFull) {
+            state.plan = st.plan.map(normalizePhase);
+            state.open = st.open || {}; state.meta = Object.assign(state.meta, st.meta || {});
+            state.ui.stale = false;
+          }
+          state.checks = st.checks || {};
+          state.notes = st.notes || {};
+          state.ui.sidebarLayout = validSidebarLayout(st.sidebarLayout || (st.ui && st.ui.sidebarLayout));
+          state.ui.fontScale = clampScale(st.uiFontScale || (st.ui && st.ui.fontScale), state.ui.fontScale);
+          state.nbFontScale = clampScale(st.nbFontScale, state.nbFontScale);
+          if (st.marks) state.marks = { archived: st.marks.archived || {}, review: st.marks.review || {} };
+          if (Array.isArray(st.nbNotes) && st.nbNotes.length) {
+            state.nbNotes = st.nbNotes.map(nbNormalizeNote).filter(Boolean);
+            state.nbActiveId = st.nbActiveId || '';
+            state.nbSecondaryId = st.nbSecondaryId || '';
+            state.nbSplit = !!st.nbSplit;
+            state.nbMode = st.nbMode === 'read' ? 'read' : 'edit';
+            state.nbSecondaryMode = st.nbSecondaryMode === 'edit' ? 'edit' : 'read';
+            state.nbView = st.nbView || 'list';
+          } else if (typeof st.notebook === 'string') { state.notebook = st.notebook; state.nbNotes = []; }
+          nbMigrate();
+          state.customized = !!st.customized;
+          state.ui.editing = false;
+          saveNow(); render(); nbRender();
+          if (fileStore.connected) fileStore.write();
+          toast('فایل با موفقیت بارگذاری شد ✅');
+        } catch (e) { toast('خطا در خواندن فایل JSON'); }
+      };
+      r.readAsText(f);
+    };
+    inp.click();
+  }
+
+
+  /* =====================================================================
+   *  دفترچه یادداشت مستقل (Notebook) — با پشتیبانی Markdown
+   *  مستقل از فاز/مرحله/زیرمرحله؛ در همه جا با دکمه شناور و دکمه هدر
+   *  در دسترس است. متن در state.notebook ذخیره و در فایل کناری هم نوشته می شود.
+   * ===================================================================== */
+  /* --- رندر مینیمال Markdown (بدون وابستگی خارجی) --- */
+  function highlightStackEscaped(text) {
+    const term = String(state.ui.stack || '').trim();
+    if (!term) return text;
+    const needle = esc(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!needle) return text;
+    try { return text.replace(new RegExp(needle, 'gi'), m => '<mark class="hl-stack">' + m + '</mark>'); }
+    catch (e) { return text; }
+  }
+  function mdInline(t) {
+    let x = highlightStackEscaped(esc(t));
+    x = x.replace(/`([^`]+)`/g, '<code>$1</code>');
+    x = x.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    x = x.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    x = x.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    x = x.replace(/==([^=]+)==/g, '<mark>$1</mark>');
+    x = x.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, txt, href) {
+      const h = href.replace(/&amp;/g, '&');
+      if (!/^(https?:|mailto:|#|\/)/i.test(h)) return m;
+      return '<a href="' + h + '" target="_blank" rel="noopener noreferrer">' + txt + '</a>';
+    });
+    x = x.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, function (m, p, u) {
+      return p + '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + u + '</a>';
+    });
+    return x;
+  }
+  function highlightCode(source, language) {
+    const src = String(source || ''), lang0 = String(language || '').toLowerCase();
+    const aliases = { js:'javascript', jsx:'javascript', mjs:'javascript', cjs:'javascript', ts:'typescript', tsx:'typescript', py:'python', rb:'ruby', sh:'bash', zsh:'bash', yml:'yaml', xml:'html', xhtml:'html', htm:'html', h:'c', cxx:'cpp', 'c++':'cpp' };
+    const lang = aliases[lang0] || lang0;
+    const keywords = {
+      javascript:'const let var function return if else for while do switch case break continue try catch finally throw new class extends import export from as await async yield this super typeof instanceof in of true false null undefined delete void debugger',
+      typescript:'const let var function return if else for while do switch case break continue try catch finally throw new class extends import export from as await async yield this super typeof instanceof in of true false null undefined type interface enum implements public private protected readonly namespace module declare keyof unknown never any string number boolean',
+      python:'def class return if elif else for while break continue try except finally raise with as import from lambda yield async await self True False None and or not in is pass global nonlocal assert del match case',
+      php:'function return if else elseif foreach for while do switch case break continue try catch finally throw new class extends implements public private protected static use namespace echo print true false null as fn',
+      bash:'if then else elif fi for while do done case esac function return local export readonly in echo cd pwd printf read set unset exit source',
+      sql:'select from where and or not null is like in join left right inner outer on as group by order having limit offset insert into values update set delete create alter table primary key foreign references drop distinct count sum avg min max',
+      css:'important inherit initial unset auto none block flex grid inline position absolute relative fixed sticky color background display width height margin padding border font opacity overflow transform',
+      json:'true false null',
+      html:'doctype html head body div span section article main aside header footer nav button input form label script style link meta title class id type name value href src role aria-label data-id'
+    };
+    const types = new Set('Array Object String Number Boolean Date Map Set Promise Error RegExp Math JSON HTMLElement Element Event NodeList'.split(' '));
+    const wordSet = new Set((keywords[lang] || keywords.javascript).split(/\s+/));
+    const lineHash = ['python','bash','yaml','ruby','php'].includes(lang);
+    const lineDash = lang === 'sql';
+    const isJs = ['javascript','typescript','java','c','cpp','csharp','go','rust','swift','kotlin'].includes(lang);
+    let i = 0, out = '';
+    const span = (cls, text) => '<span class="hl-' + cls + '">' + esc(text) + '</span>';
+    const starts = (x) => src.slice(i, i + x.length) === x;
+    while (i < src.length) {
+      const ch = src[i];
+      if (starts('/*')) {
+        const end = src.indexOf('*/', i + 2), j = end < 0 ? src.length : end + 2;
+        out += span('comment', src.slice(i,j)); i=j; continue;
+      }
+      if (lang === 'html' && starts('<!--')) {
+        const end = src.indexOf('-->', i + 4), j = end < 0 ? src.length : end + 3;
+        out += span('comment', src.slice(i,j)); i=j; continue;
+      }
+      if (starts('//') || (lineDash && starts('--')) || (lineHash && ch === '#')) {
+        let j = src.indexOf('\n', i); if (j < 0) j = src.length;
+        out += span('comment', src.slice(i,j)); i=j; continue;
+      }
+      if (ch === '"' || ch === "'" || ch === '`') {
+        const quote = ch; let j = i + 1;
+        while (j < src.length) { if (src[j] === '\\') { j += 2; continue; } if (src[j] === quote) { j++; break; } j++; }
+        const token = src.slice(i,j);
+        const after = src.slice(j).match(/^\s*:/);
+        const cls = lang === 'json' && after ? 'property' : 'string';
+        out += span(cls, token); i=j; continue;
+      }
+      const number = src.slice(i).match(/^(?:0x[0-9a-f]+|(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/i);
+      if (number) { out += span('number', number[0]); i += number[0].length; continue; }
+      const word = src.slice(i).match(/^[A-Za-z_$][\w$-]*/);
+      if (word) {
+        const token = word[0], after = src.slice(i + token.length).match(/^\s*([(:])/), prev = src.slice(0,i).match(/(?:<\/?|\s)([\w-]+)$/);
+        let cls = '';
+        if (lang === 'json' && src.slice(i + token.length).match(/^\s*:/)) cls = 'property';
+        else if (wordSet.has(token) || wordSet.has(token.toLowerCase())) cls = 'keyword';
+        else if (types.has(token) || (/^[A-Z]/.test(token) && ['python','php','typescript','javascript'].includes(lang))) cls = 'type';
+        else if (lang === 'css' && src.slice(i + token.length).match(/^\s*:/)) cls = 'property';
+        else if (lang === 'html' && /<\/?$/.test(src.slice(0,i))) cls = 'tag';
+        else if (lang === 'html' && src.slice(i + token.length).match(/^\s*=/)) cls = 'property';
+        else if (after && after[1] === '(') cls = 'function';
+        else if (isJs && /^[A-Z]/.test(token)) cls = 'type';
+        out += cls ? span(cls,token) : esc(token); i += token.length; continue;
+      }
+      if (/[=+*/%<>!&|^~?:-]/.test(ch)) {
+        const op = src.slice(i).match(/^(?:===|!==|=>|==|!=|<=|>=|&&|\|\||\?\?|\+\+|--|\+=|-=|\*=|\/=|\*\*|->|::|[=+*/%<>!&|^~?:-])/)[0];
+        out += span('operator',op); i += op.length; continue;
+      }
+      out += esc(ch); i++;
+    }
+    return out;
+  }
+  function mdToHtml(src) {
+    const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+    const out = []; let i = 0;
+    const cellSplit = (r) => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+    while (i < lines.length) {
+      const ln = lines[i];
+      const fence = ln.match(/^\s*(```|~~~)\s*([a-z0-9_+#.-]*)\s*$/i);
+      if (fence) {
+        const marker = fence[1], lang = (fence[2] || '').toLowerCase(); i++; const buf = [];
+        while (i < lines.length && !new RegExp('^\\s*' + marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(lines[i])) { buf.push(lines[i]); i++; }
+        if (i < lines.length) i++;
+        const langAttr = lang || 'code';
+        out.push('<pre class="md-pre" data-lang="' + esc(langAttr) + '"><code class="language-' + esc(langAttr) + '">' + highlightCode(buf.join('\n'),lang) + '</code></pre>'); continue;
+      }
+      if (/^\s*$/.test(ln)) { i++; continue; }
+      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(ln)) { out.push('<hr>'); i++; continue; }
+      let m = ln.match(/^(#{1,6})\s+(.*)$/);
+      if (m) { const lv = m[1].length; out.push('<h' + lv + '>' + mdInline(m[2]) + '</h' + lv + '>'); i++; continue; }
+      if (/^\s*>/.test(ln)) {
+        const buf = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) { buf.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+        out.push('<blockquote>' + mdInline(buf.join('\n')).replace(/\n/g, '<br>') + '</blockquote>'); continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(ln) && i + 1 < lines.length && /^\s*\|[\s:\-|]+\|\s*$/.test(lines[i + 1])) {
+        const head = cellSplit(ln); i += 2; const rows = [];
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(cellSplit(lines[i])); i++; }
+        out.push('<table class="md-table"><thead><tr>' + head.map(h => '<th>' + mdInline(h) + '</th>').join('') + '</tr></thead><tbody>' +
+          rows.map(r => '<tr>' + r.map(c => '<td>' + mdInline(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>');
+        continue;
+      }
+      if (/^\s*([-*+]|\d+[.)])\s+/.test(ln)) {
+        const ordered = /^\s*\d+[.)]\s+/.test(ln);
+        const items = [];
+        while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, '')); i++;
+        }
+        out.push('<' + (ordered ? 'ol' : 'ul') + '>' + items.map(t => {
+          const tm = t.match(/^\[( |x|X)\]\s*(.*)$/);
+          if (tm) return '<li class="md-task">' + (tm[1].toLowerCase() === 'x' ? '☑' : '☐') + ' ' + mdInline(tm[2]) + '</li>';
+          return '<li>' + mdInline(t) + '</li>';
+        }).join('') + '</' + (ordered ? 'ol' : 'ul') + '>');
+        continue;
+      }
+      const buf = [ln]; i++;
+      while (i < lines.length && !/^\s*$/.test(lines[i]) &&
+             !/^\s*(#{1,6}\s|>|[-*+]\s|\d+[.)]\s|```|\|)/.test(lines[i])) { buf.push(lines[i]); i++; }
+      out.push('<p>' + mdInline(buf.join('\n')).replace(/\n/g, '<br>') + '</p>');
+    }
+    return out.join('\n') || '<p class="md-empty">هنوز چیزی نوشته نشده…</p>';
+  }
+
+  /* --- Notebook چندیادداشتی + Split View اختیاری ---
+   * حالت پیش فرض یک یادداشت است. در Split هر پنل یادداشت، Toolbar و Read/Edit مستقل دارد. */
+  let nbEls = null;
+  function nbMount() {
+    if (nbEls) return;
+    const makeToolbar = (side) => {
+      const fmt = (v, label, title) => '<button class="iact" data-nb="fmt" data-v="' + v + '" data-side="' + side + '" title="' + title + '">' + label + '</button>';
+      const act = (name, label, title, cls) => '<button class="iact ' + (cls || '') + '" data-nb="' + name + '" data-side="' + side + '" title="' + title + '">' + label + '</button>';
+      return '<div class="nb-tools" data-nb-tools="' + side + '">' +
+        '<div class="nb-format" data-nb-formatbar="' + side + '">' +
+          fmt('h1','H1','عنوان ۱') + fmt('h2','H2','عنوان ۲') + fmt('h3','H3','عنوان ۳') + '<span class="nb-sep"></span>' +
+          fmt('b','<b>B</b>','ضخیم (Bold)') + fmt('i','<i>I</i>','کج (Italic)') + fmt('strike','<s>S</s>','خط خورده') + fmt('code','&lt;/&gt;','کد درون خطی') + '<span class="nb-sep"></span>' +
+          fmt('ul','• لیست','لیست نقطه ای') + fmt('ol','۱. شماره دار','لیست شماره دار') + fmt('cb','☐ کار','چک باکس کار') + fmt('quote','❝ نقل قول','نقل قول') +
+          fmt('link',I('share') + ' لینک','لینک') + fmt('table','▦ جدول','جدول') + fmt('hr','― خط','خط جداکننده') +
+        '</div>' +
+        '<div class="nb-actions">' +
+          act('copy',I('copy') + ' <span data-nb-copylabel="' + side + '">کپی Markdown</span>','کپی متن این پنل') +
+          act('share',I('share') + ' اشتراک','اشتراک گذاری این یادداشت') +
+          act('download',I('export') + ' دانلود MD','دانلود این یادداشت به صورت Markdown') +
+          act('duplicate',I('copy') + ' تکثیر','تکثیر یادداشت این پنل') +
+          act('new2',I('plus') + ' جدید','ساخت یادداشت جدید در این پنل') +
+          act('delete',I('trash') + ' حذف','حذف یادداشت این پنل','d') +
+        '</div>' +
+      '</div>';
+    };
+    const wrap = document.createElement('div');
+    wrap.innerHTML =
+      '<div class="nb-overlay" id="nbOverlay"></div>' +
+      '<aside class="nb" id="nbPanel" role="dialog" aria-modal="false" aria-label="دفترچه یادداشت" aria-hidden="true">' +
+        '<div class="nb-head">' +
+          '<span class="nb-title">' + I('note') + ' دفترچه یادداشت <small>Notebook</small><b class="nb-total" data-nb-total>۰</b></span>' +
+          fontScaleControls('nb','notebook') +
+          '<span class="nb-state" data-nb-state>—</span>' +
+          '<button class="iact" data-nb="close" title="بستن (Esc)">' + I('x') + '</button>' +
+        '</div>' +
+        '<div class="nb-listview" data-nb-listview>' +
+          '<div class="nb-listtools">' +
+            '<div class="nb-search"><span class="ico">' + I('search') + '</span><input id="nbSearch" type="search" placeholder="جست وجو در یادداشت ها…" aria-label="جست وجو در یادداشت ها"></div>' +
+            '<button class="btn pri" data-nb="new">' + I('plus') + ' یادداشت جدید</button>' +
+          '</div>' +
+          '<div class="nb-list" id="nbList" role="list"></div>' +
+          '<div class="nb-foot"><span data-nb-listcount>۰ یادداشت</span><span class="nb-save">ذخیره خودکار · آخرین یادداشت بازشده حفظ می شود</span></div>' +
+        '</div>' +
+        '<div class="nb-noteview" data-nb-noteview hidden>' +
+          '<div class="nb-note-top">' +
+            '<button class="iact nb-back" data-nb="back-list" title="بازگشت به فهرست یادداشت ها">‹ Back to Note List</button>' +
+            '<span class="nb-top-title">Last Note · Split View برای مقایسه اختیاری</span>' +
+            '<div class="nb-top-actions">' +
+              '<button class="iact nb-split-toggle" data-nb="split-toggle" aria-pressed="false" title="نمایش دو یادداشت کنار هم">▥ Split View | مقایسه</button>' +
+              '<button class="iact" data-nb="new" title="یادداشت جدید">' + I('plus') + ' یادداشت جدید</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="nb-workspace" data-nb-workspace>' +
+            '<section class="nb-pane nb-pane-primary" data-nb-pane="primary" aria-label="یادداشت اصلی">' +
+              '<div class="nb-pane-head">' +
+                '<input class="nb-title-input" id="nbTitle" type="text" data-nb-title="primary" placeholder="عنوان یادداشت…" aria-label="عنوان یادداشت اصلی">' +
+                '<button class="iact nb-mode-toggle nb-pane-mode" data-nb="toggle-mode" data-side="primary" title="سوییچ مستقل بین Edit و Read Mode"></button>' +
+              '</div>' +
+              makeToolbar('primary') +
+              '<div class="nb-body">' +
+                '<textarea class="nb-edit" id="nbEdit" data-nb-edit="primary" spellcheck="false" placeholder="Markdown بنویس…&#10;&#10;# عنوان، **ضخیم**، - لیست، - [ ] کار، | جدول | و `کد` پشتیبانی می شود."></textarea>' +
+                '<div class="nb-preview md" id="nbPreview" data-nb-preview="primary" hidden></div>' +
+              '</div>' +
+              '<div class="nb-foot"><span data-nb-count="primary">۰ کاراکتر</span><span data-nb-updated="primary"></span><span class="nb-save">ذخیره خودکار ✓</span></div>' +
+            '</section>' +
+            '<section class="nb-pane nb-pane-secondary" data-nb-pane="secondary" aria-label="یادداشت دوم" hidden>' +
+              '<div class="nb-pane-head nb-pane-head-secondary">' +
+                '<div class="nb-pane-select"><select data-nb-secondary-select aria-label="انتخاب یادداشت دوم"></select></div>' +
+                '<button class="iact nb-mode-toggle nb-pane-mode" data-nb="toggle-mode" data-side="secondary" title="سوییچ مستقل بین Edit و Read Mode"></button>' +
+                '<button class="iact nb-pane-close" data-nb="close-split" title="بستن پنل دوم">' + I('x') + '</button>' +
+              '</div>' +
+              '<div class="nb-title-row nb-secondary-title-row"><input class="nb-title-input" id="nbTitleSecondary" type="text" data-nb-title="secondary" placeholder="عنوان یادداشت دوم…" aria-label="عنوان یادداشت دوم"></div>' +
+              makeToolbar('secondary') +
+              '<div class="nb-body">' +
+                '<textarea class="nb-edit" id="nbEditSecondary" data-nb-edit="secondary" spellcheck="false" placeholder="یادداشت دوم را اینجا ویرایش کن…"></textarea>' +
+                '<div class="nb-preview md" id="nbPreviewSecondary" data-nb-preview="secondary" hidden></div>' +
+              '</div>' +
+              '<div class="nb-foot"><span data-nb-count="secondary">۰ کاراکتر</span><span data-nb-updated="secondary"></span><span class="nb-save">ذخیره خودکار ✓</span></div>' +
+            '</section>' +
+          '</div>' +
+        '</div>' +
+      '</aside>' +
+      '<button class="fab" id="fabNote" type="button" title="باز/بسته کردن دفترچه یادداشت">' +
+        I('note', 'big') + '<span>دفترچه</span><b class="fab-dot" data-nb-dot hidden></b>' +
+      '</button>';
+    while (wrap.firstChild) document.body.appendChild(wrap.firstChild);
+    nbEls = {
+      panel: $('#nbPanel'), overlay: $('#nbOverlay'), fab: $('#fabNote'),
+      edit: $('#nbEdit'), editSecondary: $('#nbEditSecondary'), preview: $('#nbPreview'), previewSecondary: $('#nbPreviewSecondary'),
+      title: $('#nbTitle'), titleSecondary: $('#nbTitleSecondary'), search: $('#nbSearch'), secondarySelect: $('[data-nb-secondary-select]'),
+      list: $('#nbList'), listView: $('[data-nb-listview]'), noteView: $('[data-nb-noteview]'), workspace: $('[data-nb-workspace]'),
+      primaryPane: $('[data-nb-pane="primary"]'), secondaryPane: $('[data-nb-pane="secondary"]'),
+      state: $('[data-nb-state]'), dot: $('[data-nb-dot]'), total: $('[data-nb-total]'), listCount: $('[data-nb-listcount]'),
+      modeBtn: $('[data-nb="toggle-mode"][data-side="primary"]'), splitBtn: $('[data-nb="split-toggle"]')
+    };
+    nbEls.fab.addEventListener('click', () => nbToggle());
+    nbEls.overlay.addEventListener('click', () => nbToggle(false));
+    nbEls.panel.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-nb]'); if (!b) return;
+      const a = b.dataset.nb, side = b.dataset.side || 'primary';
+      if (a === 'close') nbToggle(false);
+      else if (a === 'new' || a === 'new2') nbCreate(side);
+      else if (a === 'back-list') nbBackToList();
+      else if (a === 'open') nbOpenNote(b.dataset.id);
+      else if (a === 'split-toggle') nbToggleSplit();
+      else if (a === 'close-split') nbToggleSplit(false);
+      else if (a === 'font-scale') adjustFontScale('nb', b.dataset.dir);
+      else if (a === 'toggle-mode') nbToggleMode(null, side);
+      else if (a === 'fmt') nbFormat(b.dataset.v, side);
+      else if (a === 'copy') nbCopy(side);
+      else if (a === 'share') nbShare(side);
+      else if (a === 'download') nbDownload(side);
+      else if (a === 'duplicate') nbDuplicate(null, side);
+      else if (a === 'delete') nbDeleteNote(nbNoteId(side), true, side);
+      else if (a === 'delete-card') { e.stopPropagation(); nbDeleteNote(b.dataset.id, false, 'list'); }
+      else if (a === 'duplicate-card') { e.stopPropagation(); nbDuplicate(b.dataset.id, 'primary'); }
+    });
+    [nbEls.edit, nbEls.editSecondary].forEach(ta => ta.addEventListener('input', () => {
+      const side = ta.dataset.nbEdit, n = nbActive(side); if (!n) return;
+      n.body = ta.value; n.updatedAt = new Date().toISOString(); nbSyncLegacy();
+      clearTimeout(ta._saveTimer); ta._saveTimer = setTimeout(() => { save(); nbRenderCounts(side); }, 220);
+    }));
+    [nbEls.title, nbEls.titleSecondary].filter(Boolean).forEach(inp => inp.addEventListener('input', () => {
+      const side = inp.dataset.nbTitle, n = nbActive(side); if (!n) return;
+      n.title = inp.value; n.updatedAt = new Date().toISOString(); nbSyncLegacy();
+      clearTimeout(inp._saveTimer); inp._saveTimer = setTimeout(() => { save(); nbRenderCounts(side); }, 220);
+    }));
+    nbEls.secondarySelect.addEventListener('change', () => {
+      const id = nbEls.secondarySelect.value;
+      if (!id || id === state.nbActiveId) return;
+      state.nbSecondaryId = id; save(); nbRender();
+    });
+    nbEls.search.addEventListener('input', () => { state.nbQuery = nbEls.search.value; nbRenderList(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { if (state.ui.phaseDrawerOpen) { togglePhaseDrawer(false); return; } closeMenus(); nbToggle(false, true); closeModal(); }
+    });
+    document.addEventListener('click', (e) => { if (!e.target.closest('.menu-wrap')) closeMenus(); });
+  }
+  function nbNoteId(side) { return side === 'secondary' ? state.nbSecondaryId : state.nbActiveId; }
+  function nbMode(side) { return side === 'secondary' ? state.nbSecondaryMode : state.nbMode; }
+  function nbToggle(force, silent) {
+    if (!nbEls) return;
+    const open = (typeof force === 'boolean') ? force : !state.ui.nbOpen;
+    state.ui.nbOpen = open;
+    nbEls.panel.classList.toggle('open', open);
+    nbEls.panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    nbEls.overlay.classList.toggle('show', open);
+    document.body.classList.toggle('nb-open', open);
+    if (open) {
+      nbMigrate();
+      state.nbView = nbActive() ? 'note' : 'list';
+      nbRender();
+      setTimeout(() => {
+        if (state.nbView === 'note') { if (nbMode('primary') === 'read') nbEls.modeBtn.focus(); else nbEls.edit.focus(); }
+        else if (nbEls.search) nbEls.search.focus();
+      }, 140);
+    } else if (!silent) save();
+    const hb = $('[data-act="notebook"]'); if (hb) hb.classList.toggle('on', open);
+  }
+  function nbBackToList() {
+    state.nbView = 'list'; save(); nbRender();
+    if (nbEls.search) setTimeout(() => nbEls.search.focus(), 60);
+  }
+  function nbOpenNote(id) {
+    const n = (state.nbNotes || []).filter(x => x.id === id)[0]; if (!n) return;
+    state.nbActiveId = id; state.nbView = 'note'; nbMigrate(); save(); nbRender();
+    setTimeout(() => { if (nbMode('primary') !== 'read') nbEls.edit.focus(); }, 80);
+  }
+  function nbToggleSplit(force) {
+    const want = typeof force === 'boolean' ? force : !state.nbSplit;
+    if (!want) { state.nbSplit = false; save(); nbRender(); return; }
+    nbMigrate();
+    if (!state.nbActiveId) { toast('ابتدا یک یادداشت را باز کن.'); return; }
+    let other = (state.nbNotes || []).find(n => n.id === state.nbSecondaryId && n.id !== state.nbActiveId);
+    if (!other) other = (state.nbNotes || []).find(n => n.id !== state.nbActiveId);
+    if (!other) { toast('برای Split View دست کم دو یادداشت لازم است. یک یادداشت دیگر بساز.'); return; }
+    state.nbSecondaryId = other.id; state.nbSplit = true; save(); nbRender();
+  }
+  function nbCreate(side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    nbMigrate();
+    const now = new Date().toISOString();
+    const n = { id: uid('nb'), title: '', body: '', createdAt: now, updatedAt: now };
+    state.nbNotes.push(n);
+    if (side === 'secondary') { state.nbSecondaryId = n.id; state.nbSecondaryMode = 'edit'; state.nbSplit = true; }
+    else { state.nbActiveId = n.id; state.nbMode = 'edit'; }
+    state.nbView = 'note'; nbSyncLegacy(); saveNow(); nbRender();
+    setTimeout(() => { const input = side === 'secondary' ? $('[data-nb-title="secondary"]') : nbEls.title; if (input) input.focus(); }, 80);
+    toast('یادداشت جدید ساخته شد؛ عنوان و متن را بنویس (ذخیره خودکار است).');
+  }
+  function nbDeleteNote(id, goList, side) {
+    const n = (state.nbNotes || []).find(x => x.id === id); if (!n) { toast('یادداشتی انتخاب نشده است.'); return; }
+    const label = String(n.title || '').trim() || nbTitleFromBody(n.body);
+    if (!confirm('یادداشت «' + label + '» حذف شود؟ این کار قابل بازگشت نیست.')) return;
+    state.nbNotes = state.nbNotes.filter(x => x.id !== id);
+    if (state.nbActiveId === id) {
+      const rest = nbSorted(state.nbNotes); state.nbActiveId = rest.length ? rest[0].id : '';
+    }
+    if (state.nbSecondaryId === id) {
+      const other = state.nbNotes.find(x => x.id !== state.nbActiveId);
+      state.nbSecondaryId = other ? other.id : '';
+      if (!other) state.nbSplit = false;
+    }
+    if (state.nbSecondaryId === state.nbActiveId) {
+      const other = state.nbNotes.find(x => x.id !== state.nbActiveId);
+      state.nbSecondaryId = other ? other.id : ''; if (!other) state.nbSplit = false;
+    }
+    if (!state.nbActiveId || (goList && side !== 'secondary')) state.nbView = 'list';
+    nbSyncLegacy(); saveNow(); nbRender(); toast('یادداشت حذف شد.');
+  }
+  function nbDuplicate(id, side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const src = (state.nbNotes || []).find(x => x.id === (id || nbNoteId(side)));
+    if (!src) { toast('یادداشتی برای تکثیر نیست.'); return; }
+    const now = new Date().toISOString();
+    const n = { id: uid('nb'), title: (String(src.title || '').trim() || nbTitleFromBody(src.body)) + ' (کپی)', body: src.body || '', createdAt: now, updatedAt: now };
+    state.nbNotes.push(n);
+    if (side === 'secondary') { state.nbSecondaryId = n.id; state.nbSecondaryMode = 'edit'; state.nbSplit = true; }
+    else { state.nbActiveId = n.id; state.nbMode = 'edit'; }
+    state.nbView = 'note'; nbSyncLegacy(); saveNow(); nbRender(); toast('یادداشت تکثیر شد.');
+  }
+  function nbToggleMode(force, side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const key = side === 'secondary' ? 'nbSecondaryMode' : 'nbMode';
+    state[key] = (force === 'read' || force === 'edit') ? force : (state[key] === 'read' ? 'edit' : 'read');
+    save(); nbRenderPane(side);
+  }
+  function nbSnippet(body) {
+    return String(body || '').replace(/```[\s\S]*?```/g, ' ').replace(/[#>*`~=\-|[\]()]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+  }
+  function nbDateLabel(iso) {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleString('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return ''; }
+  }
+  function nbRenderList() {
+    if (!nbEls || !nbEls.list) return;
+    const q = norm(state.nbQuery || '');
+    let list = nbSorted(state.nbNotes || []);
+    if (q) list = list.filter(n => norm((n.title || '') + ' ' + (n.body || '')).indexOf(q) !== -1);
+    if (nbEls.search && nbEls.search.value !== (state.nbQuery || '')) nbEls.search.value = state.nbQuery || '';
+    nbEls.list.innerHTML = list.length ? list.map(n => {
+      const title = String(n.title || '').trim() || nbTitleFromBody(n.body);
+      const snip = nbSnippet(n.body) || 'بدون متن…';
+      const active = n.id === state.nbActiveId;
+      return '<div class="nb-card' + (active ? ' active' : '') + '" role="listitem" data-nb="open" data-id="' + esc(n.id) + '" tabindex="0" title="باز کردن یادداشت">' +
+        '<div class="nb-card-main"><b>' + esc(title) + '</b><p>' + esc(snip) + '</p>' +
+        '<span class="nb-card-meta">' + esc(nbDateLabel(n.updatedAt)) + ' · ' + fa(String(n.body || '').length) + ' کاراکتر' + (active ? ' · آخرین یادداشت بازشده' : '') + '</span></div>' +
+        '<span class="nb-card-acts"><button class="iact tiny" data-nb="duplicate-card" data-id="' + esc(n.id) + '" title="تکثیر">' + I('copy') + '</button>' +
+        '<button class="iact tiny d" data-nb="delete-card" data-id="' + esc(n.id) + '" title="حذف">' + I('trash') + '</button></span></div>';
+    }).join('') : '<div class="nb-empty">' + (q ? 'یادداشتی با این جست وجو پیدا نشد.' : 'هنوز یادداشتی نداری.<br>با «یادداشت جدید» اولین نوشته را بساز.') + '</div>';
+    if (nbEls.listCount) nbEls.listCount.textContent = fa((state.nbNotes || []).length) + ' یادداشت' + (q ? ' · ' + fa(list.length) + ' نتیجه' : '');
+  }
+  function nbRenderPreview(side) {
+    if (!nbEls) return;
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const n = nbActive(side), preview = side === 'secondary' ? nbEls.previewSecondary : nbEls.preview;
+    if (preview) preview.innerHTML = mdToHtml(n ? (n.body || '') : '');
+  }
+  function nbRenderCounts(side) {
+    if (!nbEls) return;
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const n = nbActive(side), txt = n ? String(n.body || '') : '';
+    const words = txt.trim() ? txt.trim().split(/\s+/).length : 0;
+    const count = $('[data-nb-count="' + side + '"]'), updated = $('[data-nb-updated="' + side + '"]');
+    if (count) count.textContent = fa(txt.length) + ' کاراکتر · ' + fa(words) + ' کلمه';
+    if (updated) updated.textContent = n ? 'آخرین ویرایش: ' + nbDateLabel(n.updatedAt) : '';
+    if (nbEls.total) nbEls.total.textContent = fa((state.nbNotes || []).length);
+    if (nbEls.dot) nbEls.dot.hidden = !((state.nbNotes || []).some(x => String(x.body || '').trim()));
+    const st = fileStore.connected ? ('ذخیره در فایل ' + SIDECAR + ' (' + (fileStore.lastSaved || '…') + ')') :
+      (store.available ? 'ذخیره در مرورگر' : 'ذخیره موقت (پیش نمایش)');
+    if (nbEls.state) nbEls.state.textContent = st;
+    const copyLabel = $('[data-nb-copylabel="' + side + '"]');
+    if (copyLabel) copyLabel.textContent = nbMode(side) === 'read' ? 'کپی متن خواندنی' : 'کپی Markdown';
+  }
+  function nbRenderPane(side) {
+    if (!nbEls) return;
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const n = nbActive(side), mode = nbMode(side);
+    const title = side === 'secondary' ? $('[data-nb-title="secondary"]') : nbEls.title;
+    const edit = side === 'secondary' ? nbEls.editSecondary : nbEls.edit;
+    const preview = side === 'secondary' ? nbEls.previewSecondary : nbEls.preview;
+    const modeBtn = $('[data-nb="toggle-mode"][data-side="' + side + '"]');
+    const formatBar = $('[data-nb-formatbar="' + side + '"]');
+    if (!n || !title || !edit || !preview) return;
+    if (document.activeElement !== title && title.value !== (n.title || '')) title.value = n.title || '';
+    if (document.activeElement !== edit && edit.value !== (n.body || '')) edit.value = n.body || '';
+    title.disabled = mode === 'read';
+    edit.hidden = mode === 'read'; preview.hidden = mode !== 'read';
+    if (formatBar) formatBar.hidden = mode === 'read';
+    if (modeBtn) {
+      modeBtn.innerHTML = mode === 'read' ? I('edit') + ' Edit | ویرایش' : '👁 Read | خواندن';
+      modeBtn.classList.toggle('on', mode === 'read');
+      modeBtn.setAttribute('aria-pressed', mode === 'read' ? 'true' : 'false');
+    }
+    nbRenderPreview(side); nbRenderCounts(side);
+  }
+  function nbRender() {
+    if (!nbEls) return;
+    nbMigrate();
+    const inNote = state.nbView === 'note' && !!nbActive();
+    const split = inNote && state.nbSplit && !!nbActive('secondary');
+    nbEls.panel.classList.toggle('mode-read', nbMode('primary') === 'read');
+    nbEls.panel.classList.toggle('mode-edit', nbMode('primary') !== 'read');
+    nbEls.panel.classList.toggle('split-open', split);
+    nbEls.listView.hidden = inNote; nbEls.noteView.hidden = !inNote;
+    nbEls.workspace.classList.toggle('split-open', split);
+    nbEls.secondaryPane.hidden = !split;
+    if (nbEls.splitBtn) {
+      nbEls.splitBtn.setAttribute('aria-pressed', split ? 'true' : 'false');
+      nbEls.splitBtn.classList.toggle('on', split);
+      nbEls.splitBtn.title = split ? 'بستن Split View' : 'نمایش دو یادداشت کنار هم';
+    }
+    if (!inNote) { nbRenderList(); nbRenderCounts('primary'); return; }
+    if (split && nbEls.secondarySelect) {
+      const others = (state.nbNotes || []).filter(n => n.id !== state.nbActiveId);
+      nbEls.secondarySelect.innerHTML = others.map(n => '<option value="' + esc(n.id) + '">' + esc(String(n.title || '').trim() || nbTitleFromBody(n.body)) + '</option>').join('');
+      nbEls.secondarySelect.value = state.nbSecondaryId;
+    }
+    nbRenderPane('primary');
+    if (split) nbRenderPane('secondary');
+  }
+  function nbFormat(kind, side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    if (nbMode(side) === 'read') nbToggleMode('edit', side);
+    const ta = side === 'secondary' ? nbEls.editSecondary : nbEls.edit; if (!ta) return;
+    const s0 = ta.selectionStart, s1 = ta.selectionEnd, val = ta.value, sel = val.slice(s0, s1);
+    const wrapIn = (pre, post, ph) => { const txt = sel || ph; ta.value = val.slice(0, s0) + pre + txt + post + val.slice(s1); ta.selectionStart = s0 + pre.length; ta.selectionEnd = s0 + pre.length + txt.length; };
+    const linePrefix = (p) => { const ls = val.lastIndexOf('\n', s0 - 1) + 1; ta.value = val.slice(0, ls) + p + val.slice(ls); ta.selectionStart = ta.selectionEnd = s0 + p.length; };
+    if (kind === 'b') wrapIn('**', '**', 'متن ضخیم');
+    else if (kind === 'i') wrapIn('*', '*', 'متن کج');
+    else if (kind === 'strike') wrapIn('~~', '~~', 'متن خط خورده');
+    else if (kind === 'h1') linePrefix('# '); else if (kind === 'h2' || kind === 'h') linePrefix('## '); else if (kind === 'h3') linePrefix('### ');
+    else if (kind === 'ul') linePrefix('- '); else if (kind === 'ol') linePrefix('1. '); else if (kind === 'cb') linePrefix('- [ ] ');
+    else if (kind === 'quote') linePrefix('> '); else if (kind === 'code') wrapIn('`', '`', 'کد'); else if (kind === 'link') wrapIn('[', '](https://)', 'متن لینک');
+    else if (kind === 'hr') ta.value = val.slice(0, s0) + '\n\n---\n\n' + val.slice(s1);
+    else if (kind === 'table') ta.value = val.slice(0, s0) + '\n| ستون ۱ | ستون ۲ |\n|---|---|\n| مقدار | مقدار |\n' + val.slice(s1);
+    const n = nbActive(side); if (n) { n.body = ta.value; n.updatedAt = new Date().toISOString(); }
+    nbSyncLegacy(); ta.focus(); save(); nbRenderPane(side);
+  }
+  function nbCurrentText(rendered, side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const n = nbActive(side); if (!n) return '';
+    const edit = side === 'secondary' ? nbEls.editSecondary : nbEls.edit;
+    const preview = side === 'secondary' ? nbEls.previewSecondary : nbEls.preview;
+    if (rendered) { nbRenderPreview(side); return (preview.innerText || preview.textContent || '').trim(); }
+    return document.activeElement === edit ? edit.value : (n.body || '');
+  }
+  function nbCopy(side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const rendered = state.nbView === 'note' && nbMode(side) === 'read', t = nbCurrentText(rendered, side);
+    if (!t.trim()) { toast('این یادداشت خالی است.'); return; }
+    const done = () => toast(rendered ? 'متن رندرشده این پنل کپی شد ✅' : 'Markdown این پنل کپی شد ✅');
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => fallbackCopy(t, done));
+    else fallbackCopy(t, done);
+  }
+  async function nbShare(side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const rendered = state.nbView === 'note' && nbMode(side) === 'read', t = nbCurrentText(rendered, side), n = nbActive(side);
+    if (!t.trim()) { toast('این یادداشت خالی است.'); return; }
+    const title = (n && String(n.title || '').trim()) || nbTitleFromBody(n ? n.body : '') || ('دفترچه یادداشت ' + BRAND);
+    try {
+      if (!rendered && navigator.canShare && window.File) {
+        const file = new File([t], 'packpolymer-note.md', { type: 'text/markdown' });
+        if (navigator.canShare({ files: [file] })) { await navigator.share({ title, files: [file] }); toast('اشتراک گذاری انجام شد ✅'); return; }
+      }
+      if (navigator.share) { await navigator.share({ title, text: t }); toast('اشتراک گذاری انجام شد ✅'); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    nbCopy(side); toast('مرورگر اشتراک گذاری مستقیم ندارد — متن کپی شد؛ هر جا می خواهی بچسبان.');
+  }
+  function nbDownload(side) {
+    side = side === 'secondary' ? 'secondary' : 'primary';
+    const n = nbActive(side), t = n ? String(n.body || '') : '';
+    if (!t.trim()) { toast('این یادداشت خالی است.'); return; }
+    const safe = (String(n.title || '').trim() || nbTitleFromBody(n.body) || 'note').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 50);
+    const name = 'packpolymer-note-' + stamp() + '.md';
+    const text = '# ' + (String(n.title || '').trim() || nbTitleFromBody(n.body)) + '\n\n' + t;
+    download(name, text, 'text/markdown'); showTextModal({ title: 'یادداشت: ' + safe, text, filename: name, mode: 'notebook' });
+  }
+  function nbClear() { nbDeleteNote(state.nbActiveId, true, 'primary'); }
+
+
+  /* ---------- commit متن های ویرایش شده --------------------------------- */
+  function commitField(el) {
+    const f = el.dataset.field, id = el.dataset.id;
+    const val = (el.innerText || '').replace(/\u00a0/g, ' ').trim();
+    if (!f || !id) return;
+    if (f === 'mtitle') { state.meta.title = val || DEF_TITLE; }
+    else if (f === 'msub') { state.meta.sub = val || DEF_SUB; }
+    else if (f === 'sub') {
+      const fs = findStep(id); if (!fs) return;
+      const x = fs.s.subs[Number(el.dataset.sub)]; if (!x) return;
+      x.title = val;
+    } else {
+      const ph = findPhase(id);
+      if (ph) {
+        if (f === 'icon') ph.icon = val || ph.icon;
+        else if (f === 'ptitle') ph.title = val || ph.title;
+        else if (f === 'goal') ph.goal = val;
+        else if (f === 'dod') ph.dod = val;
+        state.plan.forEach(x => x.steps.forEach(st2 => invalidateHay(st2)));
+      } else {
+        const fs = findStep(id);
+        if (!fs) return;
+        if (f === 'title') fs.s.title = val || fs.s.title;
+        else if (f === 'tip') fs.s.tip = val;
+        else if (f === 'meta') fs.s.meta = val;
+        invalidateHay(fs.s);
+      }
+    }
+    markCustomized(); save();
+  }
+  function markCustomized() { try { state.customized = true; } catch (e) { } }
+
+  /* ---------- رویدادها -------------------------------------------------- */
+  function bind() {
+    const app = $('#app');
+
+    app.addEventListener('change', (e) => {
+      const ck = e.target.closest('input[data-ck]');
+      if (!ck) return;
+      const k = ck.dataset.ck;
+      const phase = findPhase(k);
+      if (phase) {
+        phase.steps.forEach(s => {
+          if (ck.checked) state.checks[s.id] = true; else delete state.checks[s.id];
+          s.subs.forEach(x => { if (ck.checked) state.checks[x.id] = true; else delete state.checks[x.id]; });
+        });
+        phase.steps.forEach(s => refreshStep(s.id));
+        const phaseBox = document.querySelector('.phase[data-phase="' + k + '"] .ph-ck input[data-ck]');
+        if (phaseBox) phaseBox.checked = phase.steps.length > 0 && phase.steps.every(s => stepDone(s));
+        save(); updateStats();
+        return;
+      }
+      if (ck.checked) state.checks[k] = true; else delete state.checks[k];
+
+      // منطق والد/فرزند: تیک مرحله → همه زیرمرحله ها | تیک همه زیرمرحله ها → تیک مرحله
+      const fs = findStep(k);
+      if (fs) {
+        fs.s.subs.forEach(x => { if (ck.checked) state.checks[x.id] = true; else delete state.checks[x.id]; });
+        refreshStep(k);
+      } else {
+        const owner = findStepOfSub(k);
+        if (owner) {
+          const allDone = owner.s.subs.every(x => !!state.checks[x.id]);
+          if (allDone) state.checks[owner.s.id] = true; else delete state.checks[owner.s.id];
+          const li = document.getElementById(k);
+          if (li) { li.classList.toggle('done', !!state.checks[k]); }
+          refreshStep(owner.s.id, { subs: false });
+        } else {
+          const subEl = document.getElementById(k);
+          if (subEl) subEl.classList.toggle('done', !!state.checks[k]);
+          updateStats();
+        }
+      }
+      save(); updateStats();
+    });
+
+    app.addEventListener('input', (e) => {
+      const n = e.target.closest('textarea[data-note]');
+      if (n) {
+        const k = n.dataset.note;
+        if (n.value.trim()) state.notes[k] = n.value; else delete state.notes[k];
+        n.classList.toggle('has', !!n.value.trim());
+        const cnt = n.parentElement.querySelector('.cnt');
+        if (cnt) cnt.textContent = n.value.trim() ? 'ذخیره شد ✍️' : 'خالی';
+        save(); updateStats();
+        return;
+      }
+      if (e.target.dataset && e.target.dataset.meta) {
+        const f = findStep(e.target.dataset.meta);
+        if (f) { f.s.meta = e.target.value; markCustomized(); save(); }
+        return;
+      }
+      if (e.target.id === 'phaseDrawerSearch') {
+        state.ui.phaseDrawerQuery = e.target.value;
+        expandDrawerSearch(state.ui.phaseDrawerQuery);
+        state.ui.phaseDrawerOpen = true;
+        const caret = e.target.selectionStart;
+        save(); render();
+        const search = $('#phaseDrawerSearch');
+        if (search) { try { search.focus({ preventScroll:true }); } catch (_) { search.focus(); } try { search.setSelectionRange(caret, caret); } catch (_) {} }
+        return;
+      }
+      if (e.target.id === 'q') {
+        state.ui.q = e.target.value; save();
+        clearTimeout(window.__qT);
+        window.__qT = setTimeout(() => {
+          render(); const q = $('#q'); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+        }, 320);
+      }
+    });
+
+    app.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const act = btn.dataset.act, id = btn.dataset.id;
+      // کلیک روی checkbox فاز فقط وضعیت را تغییر می دهد، نه باز/بسته بودن آن را.
+      if (act === 'toggle-phase' && (e.target.closest('[data-field]') || e.target.closest('.ph-ck'))) return;
+      if (state.ui.editing && e.target.closest('[contenteditable="true"]') && act !== 'toggle-phase') return;
+
+      switch (act) {
+        case 'toggle-phase': {
+          const ph = findPhase(id); if (!ph) return;
+          state.open[id] = !state.open[id];
+          save();
+          const el = document.getElementById(id); if (el) el.classList.toggle('open', !!state.open[id]);
+          break;
+        }
+        case 'side-toggle': {
+          if (!state.ui.sideClosed) state.ui.sideClosed = { dev: true };
+          state.ui.sideClosed[id] = !state.ui.sideClosed[id];
+          save(); render();
+          break;
+        }
+        case 'sidebar-layout-cycle': {
+          const idx = SIDEBAR_LAYOUTS.indexOf(validSidebarLayout(state.ui.sidebarLayout));
+          state.ui.sidebarLayout = SIDEBAR_LAYOUTS[(idx + 1) % SIDEBAR_LAYOUTS.length];
+          saveNow(); render();
+          toast('چیدمان سایدبار: ' + (state.ui.sidebarLayout === 'dual-right' ? 'دو سایدبار، فهرست فازها راست' : state.ui.sidebarLayout === 'single-right' ? 'یک سایدبار در سمت راست' : 'دو سایدبار، فهرست فازها چپ'));
+          break;
+        }
+        case 'font-scale': adjustFontScale(btn.dataset.scope || 'ui', btn.dataset.dir); break;
+        case 'phase-drawer-close': togglePhaseDrawer(false); break;
+        case 'side-phase-toggle': {
+          e.stopPropagation();
+          if (!state.ui.sideOpen) state.ui.sideOpen = {};
+          state.ui.sideOpen[id] = !state.ui.sideOpen[id];
+          save(); render();
+          break;
+        }
+        case 'side-step-toggle': {
+          e.stopPropagation();
+          if (!state.ui.sideStepOpen) state.ui.sideStepOpen = {};
+          state.ui.sideStepOpen[id] = !state.ui.sideStepOpen[id];
+          save(); render();
+          break;
+        }
+        case 'goto-step': if (btn.closest('#phaseNavDrawer')) state.ui.phaseDrawerOpen = false; navigateToEntity('step', id); break;
+        case 'goto-sub': if (btn.closest('#phaseNavDrawer')) state.ui.phaseDrawerOpen = false; navigateToEntity('sub', id); break;
+        case 'goto': if (btn.closest('#phaseNavDrawer')) state.ui.phaseDrawerOpen = false; navigateToEntity('phase', id); break;
+        case 'entity-menu': {
+          e.stopPropagation();
+          openEntityMenu(btn, btn.dataset.etype, btn.dataset.eid);
+          break;
+        }
+        case 'mark-filter': {
+          const v = btn.dataset.id;
+          if (!Array.isArray(state.ui.markFilters)) state.ui.markFilters = [];
+          const i = state.ui.markFilters.indexOf(v);
+          if (i === -1) state.ui.markFilters.push(v); else state.ui.markFilters.splice(i, 1);
+          save(); render();
+          toast(state.ui.markFilters.length ? 'فیلتر نشان فعال شد: ' + state.ui.markFilters.join(' + ') : 'فیلتر نشان پاک شد.');
+          break;
+        }
+        case 'mark-clear': state.ui.markFilters = []; save(); render(); break;
+        case 'note-toggle': {
+          const key = btn.dataset.key;
+          state.openNotes[key] = !state.openNotes[key]; save();
+          const wrap = document.querySelector('[data-note="' + key + '"]');
+          if (wrap) {
+            const w = wrap.closest('.note-wrap');
+            w.classList.toggle('show', !!state.openNotes[key]);
+            if (state.openNotes[key]) wrap.focus();
+          }
+          break;
+        }
+        case 'filter': state.ui.filter = id; save(); render(); break;
+        case 'stack-filter': {
+          const v = btn.dataset.id || '';
+          state.ui.stack = (state.ui.stack === v) ? '' : v;
+          save(); render();
+          window.scrollTo(0, 0);
+          if (state.ui.stack) toast('فیلتر استک: ' + state.ui.stack);
+          break;
+        }
+        case 'stack-clear': state.ui.stack = ''; save(); render(); break;
+        case 'expand-all': state.plan.forEach(p => state.open[p.id] = true); save(); render(); break;
+        case 'collapse-all': state.open = {}; save(); render(); break;
+        case 'edit-mode':
+          state.ui.editing = !state.ui.editing;
+          save(); render();
+          toast(state.ui.editing
+            ? 'حالت ویرایش روشن شد — روی هر متن کلیک کن، یا با «باز کردن همه» دکمه های افزودن/جابه جایی را ببین.'
+            : 'حالت ویرایش خاموش شد — تغییرات ذخیره شد ✍️');
+          break;
+        case 'export': exportJSON(); break;
+        case 'export-answers': exportAnswers(); break;
+        case 'import': importJSON(); break;
+        case 'report': reportMD(btn.dataset.id); break;
+        case 'report-menu': {
+          const w = btn.closest('.menu-wrap');
+          const openNow = w.classList.contains('open');
+          closeMenus();
+          if (!openNow) { updateStats(); w.classList.add('open'); }
+          break;
+        }
+        case 'notebook': nbToggle(); break;
+        case 'notebook-copy': nbCopy(); break;
+        case 'notebook-share': nbShare(); break;
+        case 'clean-all': cleanAll(); break;
+        case 'file-connect': fileStore.connect(); break;
+        case 'file-regrant': fileStore.regrant(); break;
+        case 'file-write': writeSidecarNow(); break;
+        case 'file-disconnect': fileStore.disconnect(); break;
+        case 'copy-json': copyJSON(); break;
+        case 'print': window.print(); break;
+        case 'move-phase': movePhaseTo(id, btn.dataset.dir); break;
+        case 'add-step': addStep(id, null, btn.closest('.insert-action-group')?.querySelector('[data-insert-position]')?.value); break;
+        case 'add-phase': addPhase(id, btn.closest('.insert-action-group')?.querySelector('[data-insert-position]')?.value); break;
+        case 'del-phase': delPhase(id); break;
+        case 'del-step': delStep(id); break;
+        case 'add-sub': addSub(id, btn.dataset.after, btn.closest('.insert-action-group')?.querySelector('[data-insert-position]')?.value); break;
+        case 'del-sub': delSub(id, btn.dataset.sub); break;
+        case 'move-step': moveStep(id, btn.dataset.dir); break;
+        case 'move-sub': moveSub(id, btn.dataset.sub, btn.dataset.dir); break;
+        case 'add-tip': {
+          const f = findStep(id); if (!f) return;
+          f.s.tip = f.s.tip || 'نکته تجربی: …'; touch(); render();
+          const el = document.getElementById(id);
+          if (el) { const t = el.querySelector('.tip [data-field="tip"]'); if (t) t.focus(); }
+          break;
+        }
+
+        case 'reset-content':
+          if (confirm('ساختار مراحل به حالت پیش فرض این فایل بازگردد؟ (تیک ها حفظ می شوند)')) {
+            state.plan = clone(DEFAULT_PLAN); state.customized = false; state.ui.stale = false;
+            saveNow(); render(); toast('محتوای پیش فرض بازنشانی شد');
+          }
+          break;
+        case 'apply-stale':
+          state.plan = clone(DEFAULT_PLAN); state.customized = false; state.ui.stale = false;
+          saveNow(); render(); toast('محتوای جدید بارگذاری شد');
+          break;
+        case 'dismiss-stale': state.ui.stale = false; saveNow(); $('#banner').classList.remove('show'); break;
+      }
+    });
+
+    // بعد از پایان یادداشت: به روزرسانی نشانگرهای همان مرحله
+    app.addEventListener('focusout', (e) => {
+      const n = e.target.closest('textarea[data-note]');
+      if (n) {
+        const id = n.dataset.note.replace(/^n:/, '');
+        let fs = findStep(id), ph = null, st = null;
+        if (fs) { ph = fs.ph; st = fs.s; }
+        else { const o = findStepOfSub(id); if (o) { ph = o.ph; st = o.s; } }
+        if (st) {
+          const el = document.getElementById(st.id);
+          if (el) el.outerHTML = stepHTML(ph, st, ph.steps.indexOf(st));
+          updateStats(); save();
+        }
+        return;
+      }
+      const el2 = e.target.closest('[data-field]');
+      if (el2 && state.ui.editing) commitField(el2);
+    });
+
+    app.addEventListener('keydown', (e) => {
+      const el = e.target.closest('[contenteditable="true"]');
+      if (el && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); el.blur(); }
+    });
+
+    // دکمه شناور، Drawer فهرست فازها را از سمت چپ باز و بسته می کند.
+    const phaseFab = document.getElementById('phaseFab');
+    if (phaseFab) phaseFab.addEventListener('click', () => togglePhaseDrawer());
+
+    // دکمه بازگشت به بالا (بیرون از #app است)
+    const toTop = document.getElementById('totop');
+    if (toTop) {
+      toTop.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+      let ticking = false;
+      window.addEventListener('scroll', () => {
+        if (ticking) return; ticking = true;
+        requestAnimationFrame(() => {
+          toTop.classList.toggle('show', window.scrollY > 700);
+          updateHeaderCompact();
+          ticking = false;
+        });
+      }, { passive: true });
+    }
+
+    // میان برهای اختصاصی بدون Alt و دور از میان برهای رایج مرورگر.
+    // Ctrl+Shift+. = خروجی JSON | Ctrl+Shift+; = ساخت یادداشت جدید
+    document.addEventListener('keydown', (e) => {
+      const tag = (e.target.tagName || '').toLowerCase();
+      const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.shiftKey && !e.altKey && !typing && e.code === 'Period') { e.preventDefault(); exportJSON(); return; }
+      if (mod && e.shiftKey && !e.altKey && !typing && e.code === 'Semicolon') {
+        e.preventDefault();
+        if (!state.ui.nbOpen) nbToggle(true);
+        setTimeout(() => nbCreate('primary'), state.ui.nbOpen ? 0 : 120);
+        return;
+      }
+      if (e.key === '/' && !typing) { e.preventDefault(); const q = $('#q'); if (q) q.focus(); }
+    });
+  }
+
+  /* ---------- اسکرول اسپای + اسکرول مستقل لیست فازها -------------------
+   * دو مکانیزم اسکرول:
+   *  ۱) مکانیزم اصلی: اسکرول خود صفحه برای Phases / Steps / Sub-steps
+   *  ۲) مکانیزم سایدبار: aside.side دارای overflow مستقل است و لیست فازها
+   *     (.navlist) هم اسکرول داخلی خودش را دارد؛ با اسکرول صفحه، آیتم فعال
+   *     خودکار داخل لیست دیده می شود.
+   * ------------------------------------------------------------------- */
+  let spyObs = null;
+  function scrollNavTo(id) {
+    const list = $('.navlist'); if (!list) return;
+    const item = list.querySelector('[data-act="goto"][data-id="' + id + '"]'); if (!item) return;
+    const top = item.offsetTop, h = item.offsetHeight;
+    if (top < list.scrollTop + 6) list.scrollTop = Math.max(0, top - 10);
+    else if (top + h > list.scrollTop + list.clientHeight - 6) list.scrollTop = top + h - list.clientHeight + 10;
+  }
+  function spy() {
+    if (spyObs) spyObs.disconnect();
+    if (!('IntersectionObserver' in window)) return;
+    spyObs = new IntersectionObserver((ents) => {
+      ents.forEach(en => {
+        if (en.isIntersecting) {
+          $$('.navitem').forEach(n => n.classList.toggle('on', n.dataset.id === en.target.id));
+          scrollNavTo(en.target.id);
+        }
+      });
+    }, { rootMargin: '-90px 0px -70% 0px', threshold: 0 });
+    $$('.phase').forEach(p => spyObs.observe(p));
+  }
+
+  /* ---------- شروع ------------------------------------------------------ */
+  load();
+  // پیش فرض: دو فاز اول باز (سایر فازها با کلیک/جست وجو باز می شوند تا صفحه سبک بماند)
+  if (!Object.keys(state.open).length) state.plan.slice(0, 2).forEach(p => { state.open[p.id] = true; });
+  let booted = false;
+  function boot() {
+    if (booted) return; booted = true;
+    nbMount();
+    entMenuMount();
+    bind();
+    render();
+    nbRender();
+    // Run immediately for deep links, then re-run only if sidecar/handle loading replaced state.
+    handleDeepLink();
+    bootStores().then(used => { if (used) handleDeepLink(); });
+    window.addEventListener('hashchange', handleDeepLink);
+  }
+  async function bootStores() {
+    let used = false;
+    try { used = await fileStore.restoreFromIdb(); } catch (e) { }
+    if (!used && !fileStore.connected) {
+      const side = await fileStore.fetchSidecar();
+      if (side && !answersEmpty(side)) {
+        const localEmpty = answersEmpty(state);
+        const newer = side.savedAt && state.savedAt ? (Date.parse(side.savedAt) > Date.parse(state.savedAt)) : false;
+        if (localEmpty || newer) { applyAnswers(side, true); used = true; }
+      }
+    }
+    if (used) {
+      saveNow(); render(); nbRender();
+      toast('پاسخ ها از ' + SIDECAR + ' بارگذاری شد ✅');
+    } else if (fileStore.status !== 'connected') {
+      render(); nbRender();
+    }
+    return used;
+  }
+  document.addEventListener('DOMContentLoaded', boot);
+  if (document.readyState !== 'loading') boot();
+})();

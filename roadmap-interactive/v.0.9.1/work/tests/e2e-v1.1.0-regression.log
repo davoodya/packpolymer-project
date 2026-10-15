@@ -1,0 +1,59 @@
+PASS | 13 phases load and Phase markup valid | {"title":"پک پلیمر (Packpolymer) — نقشه راه ساخت بازارگاه B2B و فروشگاه B2C پلیمر و سیلیکون","phases":13,"font":true,"version":"1.1.0","appVersion":"V1.1.0","brokenSection":false,"zwnj":0,"external":0,"noDuplicateIds":true}
+PASS | app is labeled V1.1.0 | {"title":"پک پلیمر (Packpolymer) — نقشه راه ساخت بازارگاه B2B و فروشگاه B2C پلیمر و سیلیکون","phases":13,"font":true,"version":"1.1.0","appVersion":"V1.1.0","brokenSection":false,"zwnj":0,"external":0,"noDuplicateIds":true}
+PASS | Vazir font embedded and active
+PASS | no zero-width non-joiner in HTML UI/content | 0
+PASS | no external resource references | 0
+PASS | no duplicate element ids
+PASS | plan content counts: 13 phases / 122 steps / 749 substeps | {"phases":13,"steps":122,"subs":749,"nums":["فاز ۱","فاز ۲","فاز ۳","فاز ۴","فاز ۵","فاز ۶","فاز ۷","فاز ۸","فاز ۹","فاز ۱۰","فاز ۱۱","فاز ۱۲","پیوست"]}
+PASS | auto phase labels are 1..12 plus Appendix | ["فاز ۱","فاز ۲","فاز ۳","فاز ۴","فاز ۵","فاز ۶","فاز ۷","فاز ۸","فاز ۹","فاز ۱۰","فاز ۱۱","فاز ۱۲","پیوست"]
+PASS | search Phase 4 shows Phase 4, not Phase 5 | {"nums":["فاز ۴"],"phaseTitles":["فاز ۴\nپیکربندی هسته WooCommerce برای بازارگاه مواد اولیه\n۰/۵۰"],"steps":7}
+PASS | English and Persian 4 digit searches are identical | {"en":["فاز ۴"],"fa":["فاز ۴"]}
+PASS | search Phase 11 shows Phase 11, not Phase 12 | {"nums":["فاز ۱۱"],"phaseTitles":["فاز ۱۱\nتست، امنیت، کارایی و پایداری بازارگاه\n۰/۵۷"],"steps":8}
+PASS | English and Persian 11 digit searches are identical | {"en":["فاز ۱۱"],"fa":["فاز ۱۱"]}
+PASS | search tolerates legacy ZWNJ query but content uses plain spacing | {"plain":10,"legacy":10}
+PASS | sidebar test targets found | {"ph":"f10","step":"f10-s1","sub":"f10-s1-1"}
+PASS | sidebar phase and step expand to substeps
+PASS | sidebar Phase click scrolls correctly after searches | {"exists":true,"top":106,"bottom":4470,"open":true,"scrollY":55003,"hit":true}
+PASS | sidebar Step click scrolls correctly after searches | {"exists":true,"top":132,"bottom":616,"open":true,"scrollY":55230,"hit":true}
+PASS | sidebar SubStep click scrolls correctly after searches | {"exists":true,"top":154,"bottom":197,"open":true,"scrollY":55388,"hit":true}
+PASS | archive/review/share/notebook targets found | {"phase":"f2","step":"f2-s1","sub":"f2-s1-1","sub2":"f2-s1-2","sub3":"f2-s1-3","stepTitle":"نصب Woodmart، Woodmart Core و Child Theme","subTitle":"Woodmart و Woodmart Core را نصب و لایسنس/رجیستر کن (به روزرسانی خودکار از پیشخوان)."}
+PASS | phase can be marked Needs Review and remains visible | "phase"
+PASS | step can be marked Needs Review and remains visible | "step"
+PASS | sub can be marked Needs Review and remains visible | "sub"
+PASS | Needs Review indicators show on Phase, Step, SubStep | [{"id":"f2","marked":true},{"id":"f2-s1","marked":true},{"id":"f2-s1-1","marked":true}]
+PASS | Review filter in Header filters to the review-marked substep | {"selected":true,"phase":true,"step":true,"sub":true,"otherSub":false,"stepCount":1}
+PASS | Review/Archive filters also available in Sidebar
+PASS | every Sidebar card has its own Collapse/Uncollapse control | 9
+PASS | Sidebar Archive/Review card collapses and expands cleanly
+PASS | Review + Archive filters can be active together as a union | {"review":true,"archived":true,"unmarked":false,"both":2}
+PASS | Sidebar Review filter applies to main content | {"on":true,"sub":true}
+PASS | phase Share produces a URL with a deep-link fragment | {"hash":"#item=phase%3Af2","copy":"http://127.0.0.1:8899/packpolymer-marketplace-roadmap.html#item=phase%3Af2"}
+PASS | step Share produces a URL with a deep-link fragment | {"hash":"#item=step%3Af2-s1","copy":"http://127.0.0.1:8899/packpolymer-marketplace-roadmap.html#item=step%3Af2-s1"}
+PASS | sub Share produces a URL with a deep-link fragment | {"hash":"#item=sub%3Af2-s1-1","copy":"http://127.0.0.1:8899/packpolymer-marketplace-roadmap.html#item=sub%3Af2-s1-1"}
+PASS | shared URL deep-link opens and scrolls to exact SubStep | {"exists":true,"y":138,"scrollY":9698,"phaseOpen":true}
+PASS | deep-link page has zero JS errors | []
+ACTION notebook: phase f2
+PASS | phase Add to Notebook creates and opens a new note | {"title":"فاز ۳ — راه اندازی و شخصی سازی قالب Woodmart","bodyStart":"# فاز ۳ — راه اندازی و شخصی سازی قالب Woodmart\n\n> قالب Woodmart را به عنوان ستون ظاهری و ساختاری سایت راه اندازی کن: تایپوگرافی فارسی، هدر و مگامنو پک","length":6834}
+ACTION notebook: step f2-s1
+PASS | step Add to Notebook creates and opens a new note | {"title":"۳.۱ — نصب Woodmart، Woodmart Core و Child Theme","bodyStart":"# ۳.۱ — نصب Woodmart، Woodmart Core و Child Theme\n\n**فاز:** فاز ۳ — راه اندازی و شخصی سازی قالب Woodmart\n**مشخصات:** ≈ ۱ روز · فنی\n**استک:** Woodmart\n","length":912}
+ACTION notebook: sub f2-s1-1
+PASS | sub Add to Notebook creates and opens a new note | {"title":"۳.۱.۱ — Woodmart و Woodmart Core را نصب و لایسنس/رجیستر کن (به روزرسانی خودکار ا","bodyStart":"# ۳.۱.۱ — Woodmart و Woodmart Core را نصب و لایسنس/رجیستر کن (به روزرسانی خودکار از پیشخوان).\n\n**فاز:** فاز ۳ — راه اندازی و شخصی سازی قالب Woodmart\n*","length":327}
+PASS | Phase/Step/SubStep actions create three independent notes | 3
+PASS | phase disappears from main page when archived | "phase"
+PASS | phase is visible in Archive filter | "phase"
+PASS | step disappears from main page when archived | "step"
+PASS | step is visible in Archive filter | "step"
+PASS | sub disappears from main page when archived | "sub"
+PASS | sub is visible in Archive filter | "sub"
+PASS | Archive filter exists in both Header and Sidebar | {"header":true,"side":true}
+PASS | answers-roadmap.json restores marks and Notebook notes over HTTP | {"review":true,"archiveHidden":true,"title":"از فایل کناری"}
+PASS | sidecar-restored archived substep reappears with Archive filter
+PASS | sidecar-restored Notebook resumes its Last Note
+PASS | Clean All removes Notebook notes plus Archive/Review marks | {"nb":0,"arch":0,"review":0}
+PASS | responsive layout no horizontal overflow at 1280px | {"cw":1280,"sw":1280,"bodySW":1280,"nb":1280}
+PASS | responsive layout no horizontal overflow at 768px | {"cw":768,"sw":768,"bodySW":768,"nb":768}
+PASS | responsive layout no horizontal overflow at 414px | {"cw":414,"sw":414,"bodySW":414,"nb":414}
+PASS | Notebook is mobile-width at 414px | {"w":414,"vw":414}
+PASS | ZERO JS errors during primary regression | []
+
+ALL TESTS PASSED
